@@ -6,6 +6,7 @@
 With options (extras, uninstall...), either set env vars before the one-liner:
   $env:EIGHTBMS_EXTRAS = "all"; irm .../install.ps1 | iex          # all | audio,midi,mcp,acp,ml
   $env:EIGHTBMS_UNINSTALL = "1"; irm .../install.ps1 | iex
+  $env:EIGHTBMS_METHOD = "venv"; irm .../install.ps1 | iex          # force pipx | uv | venv
 or download and run it:
   irm .../install.ps1 -OutFile install.ps1; .\install.ps1 -All
   .\install.ps1 -Uninstall [-Purge]
@@ -106,7 +107,19 @@ function Install-8bms {
     }
 
     $m = $Opt.Method
-    if ($m -eq "auto") { $m = if ((Have pipx) -and $pyPath) { "pipx" } elseif (Have uv) { "uv" } else { "venv" } }
+    if ($env:EIGHTBMS_METHOD -and $m -eq "auto") { $m = $env:EIGHTBMS_METHOD }
+    # a tool counts as usable only if it actually runs (a pipx/uv shim left behind by an
+    # uninstalled Python fails with "The system cannot find the path specified")
+    function Works([string]$c) {
+        if (-not (Have $c)) { return $false }
+        try { & $c --version 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } catch { return $false }
+    }
+    $methods = @()
+    if ($m -eq "auto") {
+        if ((Works pipx) -and $pyPath) { $methods += "pipx" } elseif ((Have pipx) -and $pyPath) { Warn "pipx is on PATH but does not run; skipping it" }
+        if (Works uv) { $methods += "uv" } elseif (Have uv) { Warn "uv is on PATH but does not run; skipping it" }
+        if ($pyPath) { $methods += "venv" }
+    } else { $methods = @($m) }
 
     $script:exe8 = $null
     function TryInstall([string]$spec) {
@@ -149,15 +162,23 @@ function Install-8bms {
         return $true
     }
 
-    $spec = Spec
-    Say "Installing with ${m}: $spec"
-    if (-not (TryInstall $spec)) {
-        if (-not $extras.Count) { Write-Host "error install failed (see the messages above)" -ForegroundColor Red; return $false }
-        Warn "extras [$($extras -join ',')] failed to install (often: no prebuilt wheel for this Python, e.g. python-rtmidi)."
-        Warn "installing the core app without them; re-run with the flag later to add them."
-        $extras.Clear(); $spec = Spec
-        if (-not (TryInstall $spec)) { Write-Host "error install failed (see the messages above)" -ForegroundColor Red; return $false }
+    $installed = $false
+    foreach ($candidate in $methods) {
+        $m = $candidate
+        $spec = Spec
+        Say "Installing with ${m}: $spec"
+        $okNow = $false
+        try { $okNow = TryInstall $spec } catch { Warn "$m failed: $($_.Exception.Message)" }
+        if (-not $okNow -and $extras.Count) {
+            Warn "extras [$($extras -join ',')] failed to install (often: no prebuilt wheel for this Python, e.g. python-rtmidi)."
+            Warn "installing the core app without them; re-run with the flag later to add them."
+            $extras.Clear(); $spec = Spec
+            try { $okNow = TryInstall $spec } catch { Warn "$m failed: $($_.Exception.Message)" }
+        }
+        if ($okNow) { $installed = $true; break }
+        Warn "install with $m failed; trying the next method"
     }
+    if (-not $installed) { Write-Host "error install failed (see the messages above). Try: `$env:EIGHTBMS_METHOD = 'venv'; irm .../install.ps1 | iex" -ForegroundColor Red; return $false }
 
     $exe8 = $script:exe8
     if (-not ($exe8 -and (Test-Path $exe8))) { $g = Get-Command 8bms -ErrorAction SilentlyContinue; if ($g) { $exe8 = $g.Source } }
