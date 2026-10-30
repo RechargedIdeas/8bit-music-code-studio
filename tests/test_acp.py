@@ -30,8 +30,10 @@ class Client:
                 return m
 
     def close(self):
-        self.p.stdin.close()
-        self.p.wait(10)
+        # communicate() closes stdin (EOF ends the server) and drains stdout/stderr
+        # while waiting: Windows pipe buffers are small, so an
+        # unread stderr can block the server on exit
+        self.p.communicate(timeout=60)
         return self.p.returncode
 
 
