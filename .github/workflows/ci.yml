@@ -188,7 +188,7 @@ jobs:
             "raw-url-irm-iex" { $env:EIGHTBMS_COMMIT = "${{ github.sha }}" }
             "stale-copy-handover" {
               # an old cached copy must hand over to the current script (here: the checked-out one)
-              (Get-Content -Raw ./install.ps1) -replace '\$InstallerVersion = "[^"]+"', '$InstallerVersion = "0.0.1"' | Set-Content -Encoding UTF8 (Join-Path $env:RUNNER_TEMP "stale.ps1")
+              (Get-Content -Raw ./install.ps1) -replace '(?m)^\$InstallerVersion = "[^"]+"', '$InstallerVersion = "0.0.1"' | Set-Content -Encoding UTF8 (Join-Path $env:RUNNER_TEMP "stale.ps1")
               $env:EIGHTBMS_INSTALLER_URL = (Join-Path $here "install.ps1")
               $env:EIGHTBMS_SOURCE = $here
             }

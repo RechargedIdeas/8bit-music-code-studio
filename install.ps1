@@ -483,5 +483,7 @@ try {
 } finally {
     if (-not $hadCommit) { Remove-Item Env:\EIGHTBMS_COMMIT -ErrorAction SilentlyContinue }
 }
+# don't leak a probe's native exit code (e.g. a missing uv) as the script's result
+$global:LASTEXITCODE = if ($ok) { 0 } else { 1 }
 # `exit` would close the window when piped into iex, so only set an exit code when run as a file
 if (-not $ok -and $PSCommandPath) { exit 1 }
