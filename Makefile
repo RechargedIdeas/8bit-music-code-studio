@@ -20,7 +20,7 @@ gui:
 	$(PY) $(APP)
 
 demo:
-	$(PY) $(APP) render demo -o demo.wav
+	$(PY) $(APP) render demo -o demo.ogg    # needs ffmpeg; use demo.wav without it
 
 screenshot:
 	xvfb-run -a -s "-screen 0 1440x960x24" $(PY) $(APP) gui --screenshot screenshot.png --selftest

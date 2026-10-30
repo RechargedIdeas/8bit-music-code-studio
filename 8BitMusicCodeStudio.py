@@ -1888,6 +1888,8 @@ def export_code(song: Song, kind: str, path) -> Path:
 # ---------------------------------------------------------------------------
 def save_project(song: Song, path) -> Path:
     path = Path(path)
+    if path.parent and not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() == SCORE_EXT:
         path.write_text(song_to_score(song), encoding="utf-8")
     else:
@@ -2095,7 +2097,7 @@ def score_json_schema() -> dict:
         "key": r"^key\s+[A-Ga-g][#b]?\s*(" + "|".join(SCALES) + r")?$", "master": r"^master\s+[0-9.]+$", "loop": r"^loop\s+\d+-\d+$",
         "fx": r"^fx\s+\w+(\s+\w+=[-0-9.]+)*$", "inst": r"^inst\s+[\w-]+(\s+\w+)?(\s+\w+=\S+)*$",
         "track": r"^track\s+[\w-]+(\s+(drum|mute|solo|[\w-]+=\S+))*$",
-        "pat": r"^pat\s+[^\s:]+(\s+[\w-]+=\S+)*\s*:.*$", "arr": r"^arr\s+[\w-]+\s*:.*$"}
+        "pat": r"^(pat|pattern)\s+[^\s:=]+(\s+[^\s:=]+)?(\s+[\w-]+=\S+)*\s*:.*$", "arr": r"^arr\s+[\w-]+\s*:.*$"}
     return {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://github.com/RechargedIdeas/8bit-music-code-studio/schemas/8bt.schema.json",
             "title": "8bms score (.8bt)", "description": SCORE_HELP + "\nValidate semantically with `8bms check file.8bt`.",
             "type": "string", "minLength": 1, "x-line-comment": "#", "x-statement-separator": ";",

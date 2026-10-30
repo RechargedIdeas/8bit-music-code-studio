@@ -39,7 +39,7 @@
       "pattern": "^track\\s+[\\w-]+(\\s+(drum|mute|solo|[\\w-]+=\\S+))*$"
     },
     "pat": {
-      "pattern": "^pat\\s+[^\\s:]+(\\s+[\\w-]+=\\S+)*\\s*:.*$"
+      "pattern": "^(pat|pattern)\\s+[^\\s:=]+(\\s+[^\\s:=]+)?(\\s+[\\w-]+=\\S+)*\\s*:.*$"
     },
     "arr": {
       "pattern": "^arr\\s+[\\w-]+\\s*:.*$"
