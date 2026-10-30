@@ -1,6 +1,6 @@
 # Examples
 
-**TL;DR:** copy-paste starting points. Each one runs as-is from the repo root once `8bms` is installed.
+> **TL;DR** Copy-paste starting points. Each one runs as-is from the repo root once `8bms` is installed.
 
 | File | What it shows | Run |
 |---|---|---|

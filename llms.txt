@@ -1,0 +1,34 @@
+# 8Bit Music Code Studio
+
+> A chiptune studio in one Python file (NumPy synth, Tk GUI). The `8bms` CLI, MCP server, ACP agent, HTTP API and Python module all share one op registry: compose, variation, extend, arrange, remix, loopify, humanize, soundpack, stems, master, describe, critique, diff, suggest, intent, render, export. Ops are deterministic for a seed, return one terse line (or `--json`), take `--fields` to trim output, and pass songs as handles (`@last`). Offline; MIT.
+
+Start here: run `8bms tools` (or `--json`), then `8bms <op> --help`. Install: `curl -fsSL https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.sh | sh` (Windows: `irm …/install.ps1 | iex`).
+
+## Docs
+- [AGENTS.md](AGENTS.md): output contract, repo map, op table, recipes, .8bt cheat-sheet
+- [Agent framework](docs/agent-framework.md): ops, handles, fields, batch, intent, library
+- [CLI reference](docs/cli-reference.md): every command and op with args (generated)
+- [Score format](docs/score-format.md): `.8bt` text scores
+- [Note language](docs/note-language.md): `o5 l8 c e g >c`, chords, repeats, ties
+- [MCP](docs/mcp.md), [ACP](docs/acp.md), [HTTP API](docs/http-api.md), [Python API](docs/python-api.md)
+- [Exporting](docs/exporting.md): WAV/OGG, seamless loops, stems, JS/Python/JSON code
+- [ML](docs/ml.md): the 43 KB offline model; implemented vs design-only
+- [Getting started](docs/getting-started.md), [FAQ](docs/faq.md), [Glossary](docs/glossary.md), [Architecture](docs/architecture.md)
+
+## Skills
+- [compose-game-soundtrack](skills/compose-game-soundtrack/SKILL.md)
+- [make-sfx-pack](skills/make-sfx-pack/SKILL.md)
+- [loop-for-web](skills/loop-for-web/SKILL.md)
+- [remix-existing-song](skills/remix-existing-song/SKILL.md)
+- [score-format-quickref](skills/score-format-quickref/SKILL.md)
+- [mcp-setup](skills/mcp-setup/SKILL.md), [acp-setup](skills/acp-setup/SKILL.md), [build-plugin](skills/build-plugin/SKILL.md)
+
+## Machine-readable
+- [schemas/ops.schema.json](schemas/ops.schema.json): input schema per op
+- [schemas/openapi.json](schemas/openapi.json): HTTP API
+- [schemas/8bt.schema.json](schemas/8bt.schema.json), [schemas/8bms.schema.json](schemas/8bms.schema.json), [schemas/plugin.schema.json](schemas/plugin.schema.json)
+
+## Optional
+- [llms-full.txt](llms-full.txt): README, AGENTS, all docs and skills in one file
+- [examples/](examples/README.md): batch jobs, Python and HTTP clients, MCP/ACP configs
+- [Plugins](docs/plugins/README.md)

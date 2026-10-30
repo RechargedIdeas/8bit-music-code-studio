@@ -2056,7 +2056,7 @@ def op_tools() -> List[dict]:
         pos = [k for k, v in o.params.items() if v.get("pos")]
         flags = [f"--{k.replace('_', '-')}" for k in o.params if k not in pos]
         out.append({"name": n, "description": o.help, "owner": o.owner, "inputSchema": o.json_schema(),
-                    "cli": _LEGACY_CLI.get(n) or (f"8bms {n} " + " ".join([f"<{k}>" for k in pos] + [f"[{f}]" for f in flags])),
+                    "cli": _LEGACY_CLI.get(n) or (f"8bms {n} " + " ".join([f"<{k}>" for k in pos] + [f"[{f}]" for f in flags])).rstrip(),
                     "http": f"POST /ops/{n}", "mcp": n, "slash": f"/{n}"})
     return out
 
@@ -2067,6 +2067,9 @@ def openapi_spec() -> dict:
         "/ops": {"get": {"summary": "list ops with JSON schemas", "responses": {"200": {"description": "op map"}}}},
         "/tools": {"get": {"summary": "tool cards (same as `8bms tools --json`)", "responses": {"200": {"description": "list"}}}},
         "/openapi.json": {"get": {"summary": "this document", "responses": {"200": {"description": "OpenAPI 3.1"}}}},
+        "/batch": {"post": {"summary": "run several ops in order; \"$prev\" / \"$<id>\" in args reference earlier handles",
+                            "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"jobs": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": "string"}, "op": {"type": "string"}, "args": {"type": "object"}, "fields": {"type": "string"}}, "required": ["op"]}}}, "required": ["jobs"]}}}},
+                            "responses": {"200": {"description": "{results: [{id, ok, result | error}]}"}}}},
         "/prompt": {"post": {"summary": "stateful studio: notes, .8bt lines, /commands or English",
                              "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}}},
                              "responses": {"200": {"description": "{reply}"}}}},
@@ -5689,6 +5692,9 @@ def make_http_server(host: str = "127.0.0.1", port: int = 8765):
                 body = json.loads(self.rfile.read(n) or b"{}")
                 if self.path.startswith("/ops/"):
                     return self._send(200, run_op(self.path[5:], **body))
+                if self.path == "/batch":
+                    jobs = body.get("jobs", body if isinstance(body, list) else [])
+                    return self._send(200, {"results": list(run_batch(json.dumps(j) if not isinstance(j, str) else j for j in jobs))})
                 if self.path == "/prompt":
                     with lock:
                         return self._send(200, {"reply": interp.execute(body.get("text", ""))})
@@ -8804,7 +8810,8 @@ def build_parser() -> argparse.ArgumentParser:
             h = (spec.get("help") or "") + (f" (default {spec['default']})" if spec.get("default") not in (None, "") else "")
             if spec.get("type") == "bool":
                 p.add_argument(*flags, dest=k, action="store_const", const=True, default=None, help=h)
-                p.add_argument(f"--no-{k.replace('_', '-')}", dest=k, action="store_const", const=False, help=argparse.SUPPRESS)
+                p.add_argument(f"--no-{k.replace('_', '-')}", dest=k, action="store_const", const=False,
+                               help=f"turn off --{k.replace('_', '-')}" if spec.get("default") is True else argparse.SUPPRESS)
             else:
                 p.add_argument(*flags, dest=k, default=None, help=h)
         p.set_defaults(_op=name, _posk=pos)

@@ -1,7 +1,7 @@
 {
  "generator": "8Bit Music Code Studio 1.0.0 soundpack",
  "seed": 0,
- "sr": 44100,
+ "sr": 22050,
  "license": "CC0 / MIT",
  "sounds": {
   "select": {

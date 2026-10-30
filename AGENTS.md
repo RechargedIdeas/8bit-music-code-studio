@@ -1,28 +1,86 @@
-# AGENTS.md: 8bms cheat-sheet (for assistants)
+# AGENTS.md: guide for coding and music agents
 
-`8bms` is on PATH (`/usr/local/bin/8bms` → `~/.local/bin/8bms`, uv tool, editable install of this repo).
-Fallback: `python3 /workspace/8bit-music-code-studio/8BitMusicCodeStudio.py <args>`.
+> **TL;DR** Run `8bms tools` to list every op. Call ops as `8bms <op> … --fields a,b`, pass songs by handle (`@last`), and chain them with `8bms batch jobs.jsonl`. Every op is deterministic for a `--seed`. The same ops are MCP tools (`8bms mcp`), ACP slash commands (`8bms acp`) and HTTP routes (`8bms serve`). Short index: [llms.txt](llms.txt); everything in one file: [llms-full.txt](llms-full.txt).
 
-Output is a single `key=value` line by default. Use `--json` for one JSON object or `-q` for no output.
-Exit status is 0 on success and 1 on error; errors print one line, `error: …` (with `line N` for score errors).
-Use `--no-plugins` to skip plugin loading. Flags may go anywhere in argv.
+Install: see the README ([Install](README.md#install)). If `8bms` isn't on PATH, `python -m eightbit_studio <args>` or `python 8BitMusicCodeStudio.py <args>` work from a checkout.
 
-## Most-used commands
+## Output contract
+- Default output is one `key=value` line. Use `--json` for one JSON object, `--fields a,b` to keep only some keys, `-q` for none.
+- Exit status is 0 on success and 1 on error. Errors are one line, `error: …` (with `line N` for score errors).
+- Flags may go anywhere. `--no-plugins` skips plugin loading.
+- Song sources: `file.8bt`, `file.8bms`, `.json`, `demo`, `gen:<style>:<bars>:<seed>`, `-` (stdin), `@<handle>`, `@last`.
+
+## Repo map
+| Path | What |
+|---|---|
+| `8BitMusicCodeStudio.py` | the whole app. The engine is everything above `launch_gui`; then the GUI and the CLI (`build_parser`/`main`) |
+| `eightbit_studio/` | import shim: `import eightbit_studio as bms`, plus the `8bms` entry point |
+| `models/tiny-v1.json` | 43 KB offline ML model ([docs/ml.md](docs/ml.md)) |
+| `schemas/` | JSON Schemas (8bt, 8bms, plugin, ops) and `openapi.json`; generated |
+| `docs/` | user and agent docs; `cli-reference.md` ops section is generated |
+| `skills/` | agent task recipes (`SKILL.md` with frontmatter) |
+| `examples/` | batch jobs, Python/HTTP clients, MCP/ACP configs, game-audio scripts |
+| `samples/` | small generated loop and SFX packs |
+| `plugins/examples/` | wavetable, chorus, synthwave, mml example plugins |
+| `scripts/` | `gen_docs.py` (regenerate docs; `--check`), `new_plugin.py`, `build_all_plugins.py` |
+| `tests/` | pytest suite, including `test_docs_sync.py` |
+| `install.sh`, `install.ps1` | one-line installers (pipx → uv → venv) |
+| `.github/workflows/` | CI matrix + installer smoke tests; release build (no publish) |
+
+## Ops
+Generated from the registry by `python scripts/gen_docs.py`. Details and args: [docs/cli-reference.md](docs/cli-reference.md#ops) or `8bms <op> --help`.
+
+<!-- BEGIN GENERATED: ops -->
+| op | what it does | CLI |
+|---|---|---|
+| `render` | Render a song to audio (wav/ogg/mp3/flac). | `8bms render <src> [-o out.wav] [--loop] [--seamless] [--bars 1-8] [--stems DIR]` |
+| `export` | Export a song as code/data: js, py, json, score (.8bt), project (.8bms) or plugin formats. | `8bms export <src> [--js\|--py\|--json\|--score\|--project PATH] [--to KIND -o PATH]` |
+| `gen` | Generate a song in a style. Returns score text, or writes it to out (.8bt/.8bms). | `8bms gen [--style S] [--bars N] [--seed N] [--key K] [--bpm N] [-o out.8bt] [--wav out.wav]` |
+| `info` | Summarize a song. | `8bms info <src>` |
+| `check` | Validate a score/project; returns ok or the first error. | `8bms check <src>` |
+| `presets` | List instrument presets (and user instruments). | `8bms presets` |
+| `styles` | List generator styles. | `8bms styles` |
+| `score_help` | Show the .8bt score syntax. | `8bms score-help` |
+| `compose` | Compose a new song from a prompt and/or game context; reranks candidates by critique score. | `8bms compose <prompt> [--context] [--style] [--bars] [--key] [--bpm] [--seed] [--model] [--candidates] [--loop] [--out] [--wav]` |
+| `variation` | Make a variation: same form and harmony, re-voiced melody/rhythm details. | `8bms variation <src> [--amount] [--seed] [--out] [--wav]` |
+| `extend` | Extend a song by N bars: new melody over the existing accompaniment, ending with a fill. | `8bms extend <src> [--bars] [--seed] [--model] [--out] [--wav]` |
+| `arrange` | Auto-arrange: keep the melody, add chords (Viterbi), bass and a groove in a style. | `8bms arrange <src> [--style] [--seed] [--out] [--wav]` |
+| `remix` | Remix in another style or context: keeps the melody, new tempo/instruments/harmony/groove. | `8bms remix <src> [--style] [--context] [--bpm] [--seed] [--out] [--wav]` |
+| `loopify` | Make a seamless loop: set the loop region, smooth the seam, optionally render a gapless file. | `8bms loopify <src> [--bars] [--out] [--wav]` |
+| `soundpack` | Render a retro SFX pack (WAV files + manifest.json + Howler-style sprite). | `8bms soundpack <names> [--out] [--variants] [--seed] [--sprite] [--sr]` |
+| `stems` | Render one WAV per track (plus mix.wav) into a folder. | `8bms stems <src> [--out] [--seamless]` |
+| `master` | Master to a loudness target: gain to RMS target, soft limiter, fades; renders a file. | `8bms master <src> [--out] [--target-db] [--ceiling-db] [--fade-in] [--fade-out] [--loop]` |
+| `describe` | Describe a song in one paragraph plus key facts (form, chords, range, mood, score). | `8bms describe <src>` |
+| `critique` | Score a song 0-100 with metrics and concrete tips (also used to rerank compose). | `8bms critique <src>` |
+| `diff` | Structural diff of two songs: settings, tracks, notes added/removed, arrangement. | `8bms diff <a> <b>` |
+| `suggest` | ML suggestions: next notes for a pattern, chords per bar, or a groove. | `8bms suggest <src> [--kind] [--track] [--pattern] [--k] [--seed]` |
+| `humanize` | Humanize timing and velocity (deterministic per seed). | `8bms humanize <src> [--amount] [--seed] [--out] [--wav]` |
+| `intent` | Parse plain English into an op call {op, args, confidence} (no side effects). | `8bms intent <text>` |
+| `library` | List the style/preset library: styles, game contexts, grooves, presets, SFX and SFX sets. | `8bms library <what>` |
+| `ml` | Tiny ML model: info \| train \| bench (sizes, provenance, latency). | `8bms ml <action> [--out]` |
+<!-- END GENERATED: ops -->
+
+## Recipes
 ```sh
-8bms gen --style boss --bars 16 --seed 3 -o boss.8bt     # styles: 8bms styles
-8bms render boss.8bt -o boss.wav                        # also .ogg/.mp3/.flac (needs ffmpeg)
-8bms render boss.8bt -o loop.wav --seamless             # loop region, tail folded back = gapless
-8bms render boss.8bt -o x.wav --bars 5-8 | --loop | --stems stems/
-8bms export boss.8bt --js boss.js                       # ES module: SONG, createPlayer, renderOffline, playNote, STEP_EVENTS
-8bms export boss.8bt --py boss.py --json boss.json --score out.8bt --project out.8bms
-8bms info boss.8bt [--json]     8bms show demo     8bms check song.8bt
+8bms compose "tense boss fight" --context boss --seed 7 --fields handle,score
+8bms remix @last --style chase --fields handle
+8bms loopify @last --wav boss-loop.ogg --fields loop_seconds,wav
+8bms soundpack platformer -o sfx/ --fields count,manifest
+8bms master boss.wav --out boss-master.wav --target-db -14 --fields rms_db,peak_db
+8bms critique song.8bt --fields score,tips      8bms describe @last --fields summary
+8bms intent "make it spookier and loop it"      # -> which op + args to call
+8bms export @last --js song.js                  # ES module: SONG, createPlayer, renderOffline, STEP_EVENTS
 8bms do "gen town 8; bpm 100; transpose 2; /render t.wav" --save t.8bt
-8bms render - -o x.wav < song.8bt                       # score from stdin
 ```
-Song sources work anywhere a file is accepted: `file.8bt`, `file.8bms`, `.json`, `demo`, `gen:<style>:<bars>:<seed>`, `-` (stdin).
-
-For Luciverse-style JS, use `8bms export song.8bt --js out.js`, then `import {createPlayer} from './out.js'; createPlayer(new AudioContext()).start()`.
-Also exported: `STEP_EVENTS`, `STEPS`, `STEP_SECONDS` for step-based engines, and `SONG` (default export).
+Skills with step-by-step plans:
+- [compose-game-soundtrack](skills/compose-game-soundtrack/SKILL.md)
+- [make-sfx-pack](skills/make-sfx-pack/SKILL.md)
+- [loop-for-web](skills/loop-for-web/SKILL.md)
+- [remix-existing-song](skills/remix-existing-song/SKILL.md)
+- [score-format-quickref](skills/score-format-quickref/SKILL.md)
+- [mcp-setup](skills/mcp-setup/SKILL.md)
+- [acp-setup](skills/acp-setup/SKILL.md)
+- [build-plugin](skills/build-plugin/SKILL.md)
 
 ## .8bt score (the cheapest way to write music)
 ```
@@ -32,11 +90,11 @@ loop 1-8                    # bars, 1-based inclusive
 fx echo time=.3 feedback=.3 mix=.2     # also lowpass cutoff=, bitcrush bits= downsample=
 inst zap pulse duty=.125 a=.001 d=.1 s=.5 r=.05 vib=.2 arp=0,4,7 slide=-12
 track lead inst=zap vol=.7 pan=-.2
-pat lead.A: o5 l8 c e g >c <b g e c        # pat <track>.<name> [bars=N]:
-pat lead.B bars=2: (a g)x4 f/2. r/4
+pat lead A: o5 l8 c e g >c <b g e c        # pat <track> <name> [bars=N]:  (also lead.A, "Pulse 1" A)
+pat lead B bars=2: (a g)x4 f/2. r/4
 arr lead: A A B -*1 A                      # '-' empty bar, '*N' repeat
 track drums drum
-pat drums.A: kick=x...x...x...x... snare=....x.......x... hat=x.x.x.x.x.x.x.x.  # X = accent
+pat drums A: kick=x...x...x...x... snare=....x.......x... hat=x.x.x.x.x.x.x.x.  # X = accent
 ```
 Note language:
 - Notes: `c4 c#4 db4`, or a bare `c` (uses the current octave, `o5`). `>` / `<` shift the octave.
@@ -48,16 +106,10 @@ Note language:
 Instruments: `8bms presets`. Waves: pulse (duty .125/.25/.5/.75), triangle, noise (`noise_mode=short`), saw, sine, wave (4-bit table), plus plugin waves.
 
 ## Agent front-ends
-- **ACP:** `8bms acp` (Zed and opencode; prompts are music/English/slash commands).
-- **MCP:** `8bms mcp` (tool `studio` plus one tool per op).
-- **HTTP:** `8bms serve --port 8765` (`GET /ops`, `POST /ops/<name>`, `POST /prompt`).
-- **Terminal studio:** `8bms repl`. One-shot: `8bms do "…"`.
-
-Studio language (repl/do/ACP/MCP `studio`):
-- Notes are appended to the current track.
-- Statements work the same as in .8bt.
-- English: "make a mellow space song 16 bars", "faster", "transpose up 2", "add drums", "render".
-- Slash commands: `/gen /render /export js /show /info /undo /viz roll /op <op> k=v /ml <backend> <prompt>`.
+- **MCP:** `8bms mcp`, with tool `studio` plus one tool per op ([docs/mcp.md](docs/mcp.md)).
+- **ACP:** `8bms acp`, for Zed and JetBrains; prompts can be music, English or slash commands ([docs/acp.md](docs/acp.md)).
+- **HTTP:** `8bms serve --port 8765`, with `GET /tools`, `POST /ops/<name>`, `POST /batch` and `POST /prompt` ([docs/http-api.md](docs/http-api.md)).
+- **Terminal studio:** `8bms studio`; one-shot `8bms do "…"`.
 
 ## Plugins (short)
 ```sh
@@ -70,6 +122,8 @@ Studio language (repl/do/ACP/MCP `studio`):
 - Op plugins become CLI subcommands (`8bms <op> --arg v`), MCP tools, HTTP routes and ACP slash commands automatically.
 - Full guide: `docs/plugins/`. Skill: `skills/build-plugin/SKILL.md`. Examples: `plugins/examples/{wavetable,chorus,synthwave,mml}`.
 
-## Dev
-`make test` (pytest), `make screenshot` (xvfb), `make demo`, `make plugins` (validate+test+build examples).
-Engine = everything above `launch_gui` in `8BitMusicCodeStudio.py`; `import eightbit_studio as bms` exposes it.
+## Working on this repo
+- Run `pytest -q` before committing. Tests cover the engine, ops, ML latency budgets, protocols, plugins, the GUI (skipped without Tk/display) and docs sync.
+- After changing an op, a schema or a doc, run `python scripts/gen_docs.py`. `tests/test_docs_sync.py` fails when generated files are stale.
+- Keep the engine free of tkinter imports, keep every random choice seeded, and use `pathlib` + UTF-8 (CI runs on Windows).
+- Do not commit large binaries. Samples stay small and must be regenerable (see `samples/README.md`).

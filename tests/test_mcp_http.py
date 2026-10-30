@@ -43,6 +43,11 @@ def test_http_api(tmp_path):
         assert json.loads(urllib.request.urlopen(req).read())["title"]
         req = urllib.request.Request(base + "/prompt", data=json.dumps({"text": "bpm 101"}).encode(), headers={"Content-Type": "application/json"})
         assert "101" in json.dumps(json.loads(urllib.request.urlopen(req).read()))
+        jobs = [{"id": "a", "op": "compose", "args": {"context": "town", "bars": 4, "seed": 2}, "fields": "handle"},
+                {"op": "critique", "args": {"src": "$a"}, "fields": "score"}]
+        req = urllib.request.Request(base + "/batch", data=json.dumps({"jobs": jobs}).encode(), headers={"Content-Type": "application/json"})
+        res = json.loads(urllib.request.urlopen(req).read())["results"]
+        assert [r["ok"] for r in res] == [True, True] and set(res[1]["result"]) == {"score"}
     finally:
         srv.shutdown()
 

@@ -8,6 +8,7 @@ curl -s localhost:8765/health
 curl -s -X POST localhost:8765/ops/compose -H 'content-type: application/json' \
      -d '{"prompt": "chase scene", "bars": 8, "seed": 2, "_fields": "handle,score"}'
 curl -s -X POST localhost:8765/ops/render -d '{"src": "@last", "out": "chase.wav"}'
+curl -s -X POST localhost:8765/batch -d '{"jobs": [{"id": "a", "op": "compose", "args": {"context": "town", "seed": 2}}, {"op": "critique", "args": {"src": "$a"}, "fields": "score"}]}'
 curl -s -X POST localhost:8765/prompt -d '{"text": "/gen town 4"}'
 ```
 
@@ -18,6 +19,7 @@ curl -s -X POST localhost:8765/prompt -d '{"text": "/gen town 4"}'
 | `GET /tools` | — | tool cards (same as `8bms tools --json`) |
 | `GET /openapi.json` | — | OpenAPI 3.1 ([schemas/openapi.json](../schemas/openapi.json)) |
 | `POST /ops/<name>` | the op's args (+ optional `_fields`) | the op's result, or `{"error": …}` with status 400 |
+| `POST /batch` | `{"jobs": [{"id", "op", "args", "fields"}, …]}` (same shape as `jobs.jsonl`) | `{"results": [{"id", "ok", "result" \| "error"}, …]}` |
 | `POST /prompt` | `{"text": "…"}` | `{"reply": "…"}` (one studio session per server) |
 
 Paths are resolved relative to the server's working directory. Handles (`@last`) are shared with the CLI because they live in `~/.8bms/handles/`.
