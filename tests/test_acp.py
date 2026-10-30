@@ -10,7 +10,7 @@ from conftest import APP
 class Client:
     def __init__(self, cwd):
         self.p = subprocess.Popen([sys.executable, str(APP), "acp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE, text=True, cwd=cwd)
+                                  stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", cwd=cwd)
         self.updates = []
 
     def send(self, msg):

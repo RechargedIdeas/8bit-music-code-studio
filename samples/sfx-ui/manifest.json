@@ -1,0 +1,43 @@
+{
+ "generator": "8Bit Music Code Studio 1.0.0 soundpack",
+ "seed": 0,
+ "sr": 44100,
+ "license": "CC0 / MIT",
+ "sounds": {
+  "select": {
+   "file": "select.wav",
+   "ms": 70,
+   "desc": "UI select"
+  },
+  "confirm": {
+   "file": "confirm.wav",
+   "ms": 260,
+   "desc": "UI confirm"
+  },
+  "cancel": {
+   "file": "cancel.wav",
+   "ms": 260,
+   "desc": "UI cancel / back"
+  },
+  "pause": {
+   "file": "pause.wav",
+   "ms": 320,
+   "desc": "pause"
+  },
+  "menu-move": {
+   "file": "menu-move.wav",
+   "ms": 65,
+   "desc": "cursor move"
+  },
+  "text-blip": {
+   "file": "text-blip.wav",
+   "ms": 45,
+   "desc": "dialogue text"
+  },
+  "error": {
+   "file": "error.wav",
+   "ms": 300,
+   "desc": "error / denied"
+  }
+ }
+}

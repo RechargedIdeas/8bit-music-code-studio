@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT))
 # isolate user state (autosave, recent files, plugins.json) from the real ~/.8bms
 os.environ.setdefault("EIGHTBMS_HOME", tempfile.mkdtemp(prefix="8bms-test-home-"))
 os.environ["EIGHTBMS_NO_PLUGINS"] = "1"
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")   # child processes print UTF-8 on Windows too
 
 import pytest  # noqa: E402
 

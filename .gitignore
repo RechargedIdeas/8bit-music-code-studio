@@ -6,3 +6,8 @@ dist/
 build/
 *.egg-info/
 /out/
+8bms-out/
+/game-audio/
+.coverage
+.DS_Store
+Thumbs.db

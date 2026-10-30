@@ -1,0 +1,58 @@
+{
+ "generator": "8Bit Music Code Studio 1.0.0 soundpack",
+ "seed": 0,
+ "sr": 44100,
+ "license": "CC0 / MIT",
+ "sounds": {
+  "jump": {
+   "file": "jump.wav",
+   "ms": 190,
+   "desc": "platformer jump"
+  },
+  "coin": {
+   "file": "coin.wav",
+   "ms": 430,
+   "desc": "pickup / coin"
+  },
+  "powerup": {
+   "file": "powerup.wav",
+   "ms": 650,
+   "desc": "power-up"
+  },
+  "1up": {
+   "file": "1up.wav",
+   "ms": 570,
+   "desc": "extra life"
+  },
+  "hit": {
+   "file": "hit.wav",
+   "ms": 120,
+   "desc": "enemy hit"
+  },
+  "hurt": {
+   "file": "hurt.wav",
+   "ms": 280,
+   "desc": "player hurt"
+  },
+  "death": {
+   "file": "death.wav",
+   "ms": 1020,
+   "desc": "player death"
+  },
+  "door": {
+   "file": "door.wav",
+   "ms": 270,
+   "desc": "door"
+  },
+  "step": {
+   "file": "step.wav",
+   "ms": 60,
+   "desc": "footstep"
+  },
+  "levelup": {
+   "file": "levelup.wav",
+   "ms": 600,
+   "desc": "level up"
+  }
+ }
+}

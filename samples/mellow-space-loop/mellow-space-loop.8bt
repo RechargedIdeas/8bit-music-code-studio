@@ -1,0 +1,21 @@
+# 8Bit Music Code Studio score
+title Mellow Space Loop
+bpm 99; time 4/4; swing 0; key C major; master 0.8
+loop 1-16
+fx echo time=0.35 feedback=0.4 mix=0.3
+track Lead inst=flute vol=0.75 pan=-0.15 kind=pulse1
+pat Lead.A bars=4: l8 v.75 e5/8.!.85 r/8. d5 c5!.85 c5/4 c5 c5!.85 f5 b5 f5 r/4 f5 a5 g5/4!.85 g5/8. f5/8. a5 c6 r b5/4!.85 c6 b5 b5/4!.85 b5/4
+pat Lead.B bars=4: l8 v.75 g5/2!.85 c6/4!.85 c6/4 c6/4!.85 e6/4 c6/4!.85 e6 r e6/4!.85 r e6 c6!.85 a5 d6 c6 g5/4!.85 d5 d5 d5/4!.85 e5 g5
+arr Lead: -*4 A B B
+track Harmony inst=arp vol=0.55 pan=0.2 kind=pulse2
+pat Harmony.A bars=4: l4 v.6 a4 c5 e5 a4 f4 a4 c5 f4 c4 e4 g4 c4 g4 b4 d5 g4
+pat Harmony.B bars=4: l4 v.6 a4 c5 e5 a4 f4 a4 c5 f4 c4 e4 g4 c4 g4 b4 d5 g4
+arr Harmony: A A B B
+track Bass inst=bass vol=0.9 pan=0 kind=triangle
+pat Bass.A bars=4: l2 v.85 a2 e3!.8 f3 c4!.8 c3 g3!.8 g3 d4!.8
+pat Bass.B bars=4: l2 v.85 a2 e3!.8 f3 c4!.8 c3 g3!.8 g3 d4!.8
+arr Bass: A A B B
+track Drums inst=snare vol=0.75 pan=0 kind=noise drum
+pat Drums.A bars=4: kick=X.......x.......X.......x.......X.......x.......X.......x....... hat=..x...x...x...x.x.x...x...x...xx..x...x..xx...xx..x...x...x...x.
+pat Drums.B bars=4: kick=X.......x.......X.......x.......X.......x.......X.......x....... hat=..x...x...x...x...x.x.x...x...x...x...x...x...x...x...x...x...x. snare=........................................................x.x.xxxx
+arr Drums: A A B B

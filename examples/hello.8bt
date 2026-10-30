@@ -1,0 +1,10 @@
+# Smallest useful score: 8bms render examples/hello.8bt -o hello.wav
+title Hello Chiptune
+bpm 132; key C major
+inst blip pulse duty=.125 a=.001 d=.08 s=.4 r=.05
+track lead inst=blip
+pat lead.A: o5 l8 c e g >c <b g e c
+track bass inst=bass
+pat bass.A: l4 c3 c3 g2 g2
+track drums drum
+pat drums.A: kick=x...x...x...x... snare=....x.......x... hat=x.x.x.x.x.x.x.x.

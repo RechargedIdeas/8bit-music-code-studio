@@ -1,0 +1,4 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": { "8bms": { "type": "local", "command": ["8bms", "mcp"], "enabled": true } }
+}

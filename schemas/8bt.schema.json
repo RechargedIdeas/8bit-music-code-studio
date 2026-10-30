@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RechargedIdeas/8bit-music-code-studio/schemas/8bt.schema.json",
+  "title": "8bms score (.8bt)",
+  "description": ".8bt score (one statement per line; indented lines continue; ';' separates; # comments)\n  title My Song        bpm 120     time 4/4     swing 0.1     key C minor\n  master 0.8           loop 1-8    fx echo time=.3 feedback=.3 mix=.2\n  inst lead pulse duty=.25 a=.01 d=.1 s=.6 r=.1 vib=.15 arp=0,4,7 slide=-12\n  track lead inst=lead vol=.7 pan=-.2        track drums drum\n  pat lead A: o5 l8 c e g > c < g e c r      (note language)\n  pat drums A: kick=x...x...x...x... snare=....x.......x... hat=x.x.x.x.x.x.x.x.\n  arr lead: A A B A -*2 A*2                  (no arr line = patterns in order)\n\nValidate semantically with `8bms check file.8bt`.",
+  "type": "string",
+  "minLength": 1,
+  "x-line-comment": "#",
+  "x-statement-separator": ";",
+  "x-statements": {
+    "title": {
+      "pattern": "^title\\s+.+$"
+    },
+    "bpm": {
+      "pattern": "^bpm\\s+\\d+(\\.\\d+)?$"
+    },
+    "time": {
+      "pattern": "^time\\s+\\d+/\\d+$"
+    },
+    "swing": {
+      "pattern": "^swing\\s+[0-9.]+$"
+    },
+    "key": {
+      "pattern": "^key\\s+[A-Ga-g][#b]?\\s*(major|minor|dorian|phrygian|lydian|mixolydian|harmonic_minor|pentatonic|minor_pentatonic|blues|chromatic)?$"
+    },
+    "master": {
+      "pattern": "^master\\s+[0-9.]+$"
+    },
+    "loop": {
+      "pattern": "^loop\\s+\\d+-\\d+$"
+    },
+    "fx": {
+      "pattern": "^fx\\s+\\w+(\\s+\\w+=[-0-9.]+)*$"
+    },
+    "inst": {
+      "pattern": "^inst\\s+[\\w-]+(\\s+\\w+)?(\\s+\\w+=\\S+)*$"
+    },
+    "track": {
+      "pattern": "^track\\s+[\\w-]+(\\s+(drum|mute|solo|[\\w-]+=\\S+))*$"
+    },
+    "pat": {
+      "pattern": "^pat\\s+[^\\s:]+(\\s+[\\w-]+=\\S+)*\\s*:.*$"
+    },
+    "arr": {
+      "pattern": "^arr\\s+[\\w-]+\\s*:.*$"
+    }
+  },
+  "x-note-language": "pattern bodies use the note language - see docs/note-language.md",
+  "examples": [
+    "# 8Bit Music Code Studio score\ntitle Neon Orbit\nbpm 112; time 4/4; swing 0; key C major; master 0.85\nloop 5-16\nfx echo time=0.32 feedback=0.3 mix=0.18\ntrack Lead inst=lead vol=0.75 pan=-0.15 kind=pulse1"
+  ]
+}

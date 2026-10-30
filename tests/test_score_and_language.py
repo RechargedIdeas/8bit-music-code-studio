@@ -83,7 +83,7 @@ def test_load_any_sources(tmp_path):
     g = bms.load_any("gen:boss:4:2")
     assert g.length_bars() == 4
     p = tmp_path / "x.8bt"
-    p.write_text("bpm 99\ntrack a\npat a.A: c d e")
+    p.write_text("bpm 99\ntrack a\npat a.A: c d e", encoding="utf-8")
     assert bms.load_any(str(p)).bpm == 99
 
 

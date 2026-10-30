@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "8bms": { "command": "8bms", "args": ["mcp"] }
+  }
+}

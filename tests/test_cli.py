@@ -9,7 +9,7 @@ from conftest import APP
 
 
 def run(*args, cwd=None, inp=None):
-    r = subprocess.run([sys.executable, str(APP), *args], capture_output=True, text=True, cwd=cwd, input=inp, timeout=180)
+    r = subprocess.run([sys.executable, str(APP), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd, input=inp, timeout=180)
     return r
 
 
@@ -43,7 +43,7 @@ def test_json_and_quiet_modes(tmp_path):
 
 
 def test_errors_are_one_line(tmp_path):
-    (tmp_path / "bad.8bt").write_text("track a\npat a.A: c4 h9\n")
+    (tmp_path / "bad.8bt").write_text("track a\npat a.A: c4 h9\n", encoding="utf-8")
     r = run("check", "bad.8bt", cwd=tmp_path)
     assert r.returncode == 1 and r.stderr.strip().count("\n") == 0 and "line 2" in r.stderr
 

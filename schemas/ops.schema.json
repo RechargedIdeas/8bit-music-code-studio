@@ -1,0 +1,693 @@
+{
+  "render": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "file .8bt/.8bms, 'demo' or gen:style:bars:seed"
+      },
+      "out": {
+        "type": "string",
+        "description": "output file (extension picks format)",
+        "default": "out.wav"
+      },
+      "loop": {
+        "type": "boolean",
+        "description": "render only the loop region",
+        "default": false
+      },
+      "seamless": {
+        "type": "boolean",
+        "description": "gapless loop file: loop region (or --bars) with the tail folded into the start",
+        "default": false
+      },
+      "bars": {
+        "type": "string",
+        "description": "bar range like 1-8"
+      },
+      "stems": {
+        "type": "string",
+        "description": "also write per-track stems into this folder"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "export": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song source"
+      },
+      "kind": {
+        "type": "string",
+        "description": "exporter name"
+      },
+      "out": {
+        "type": "string",
+        "description": "output path (default from title)"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src",
+      "kind"
+    ]
+  },
+  "gen": {
+    "type": "object",
+    "properties": {
+      "style": {
+        "type": "string",
+        "description": "style name",
+        "default": "mellow-space"
+      },
+      "bars": {
+        "type": "integer",
+        "description": "length in bars",
+        "default": 16
+      },
+      "seed": {
+        "type": "integer",
+        "description": "random seed"
+      },
+      "key": {
+        "type": "string",
+        "description": "key like C, F#, Bb"
+      },
+      "bpm": {
+        "type": "number",
+        "description": "tempo"
+      },
+      "out": {
+        "type": "string",
+        "description": "write score/project here"
+      },
+      "wav": {
+        "type": "string",
+        "description": "also render a WAV"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": []
+  },
+  "info": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song source"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "check": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "file"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "presets": {
+    "type": "object",
+    "properties": {
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": []
+  },
+  "styles": {
+    "type": "object",
+    "properties": {
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": []
+  },
+  "score_help": {
+    "type": "object",
+    "properties": {
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": []
+  },
+  "compose": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "free text, e.g. 'tense boss fight 16 bars in E'",
+        "default": ""
+      },
+      "context": {
+        "type": "string",
+        "description": "game context: title-screen, menu, overworld, town, shop, forest, dungeon, cave, castle, battle, boss, final-boss, chase, puzzle, stealth, underwater, space, lofi-break, credits, victory, level-clear, game-over, cutscene-sad"
+      },
+      "style": {
+        "type": "string",
+        "description": "style (overrides context)"
+      },
+      "bars": {
+        "type": "integer",
+        "description": "length in bars"
+      },
+      "key": {
+        "type": "string",
+        "description": "key like C, F#, Bb"
+      },
+      "bpm": {
+        "type": "number",
+        "description": "tempo"
+      },
+      "seed": {
+        "type": "integer",
+        "description": "seed (same args + seed = same result)",
+        "default": 0
+      },
+      "model": {
+        "type": "string",
+        "description": "tiny (Markov+rules, default) | rules | <ml plugin>",
+        "default": "tiny"
+      },
+      "candidates": {
+        "type": "integer",
+        "description": "generate N and keep the best by critique score",
+        "default": 4
+      },
+      "loop": {
+        "type": "boolean",
+        "description": "make it a seamless loop (default: from context)"
+      },
+      "out": {
+        "type": "string",
+        "description": "also save the song (.8bt/.8bms)"
+      },
+      "wav": {
+        "type": "string",
+        "description": "also render audio (wav/ogg/mp3/flac)"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": []
+  },
+  "variation": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "amount": {
+        "type": "number",
+        "description": "0..1 how much to change",
+        "default": 0.3
+      },
+      "seed": {
+        "type": "integer",
+        "description": "seed (same args + seed = same result)",
+        "default": 0
+      },
+      "out": {
+        "type": "string",
+        "description": "also save the song (.8bt/.8bms)"
+      },
+      "wav": {
+        "type": "string",
+        "description": "also render audio (wav/ogg/mp3/flac)"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "extend": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "bars": {
+        "type": "integer",
+        "description": "bars to add",
+        "default": 8
+      },
+      "seed": {
+        "type": "integer",
+        "description": "seed (same args + seed = same result)",
+        "default": 0
+      },
+      "model": {
+        "type": "string",
+        "description": "tiny | rules",
+        "default": "tiny"
+      },
+      "out": {
+        "type": "string",
+        "description": "also save the song (.8bt/.8bms)"
+      },
+      "wav": {
+        "type": "string",
+        "description": "also render audio (wav/ogg/mp3/flac)"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "arrange": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "style": {
+        "type": "string",
+        "description": "style (default: guessed from tempo/scale)"
+      },
+      "seed": {
+        "type": "integer",
+        "description": "seed (same args + seed = same result)",
+        "default": 0
+      },
+      "out": {
+        "type": "string",
+        "description": "also save the song (.8bt/.8bms)"
+      },
+      "wav": {
+        "type": "string",
+        "description": "also render audio (wav/ogg/mp3/flac)"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "remix": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "style": {
+        "type": "string",
+        "description": "target style"
+      },
+      "context": {
+        "type": "string",
+        "description": "or a game context"
+      },
+      "bpm": {
+        "type": "number",
+        "description": "tempo"
+      },
+      "seed": {
+        "type": "integer",
+        "description": "seed (same args + seed = same result)",
+        "default": 0
+      },
+      "out": {
+        "type": "string",
+        "description": "also save the song (.8bt/.8bms)"
+      },
+      "wav": {
+        "type": "string",
+        "description": "also render audio (wav/ogg/mp3/flac)"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "loopify": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "bars": {
+        "type": "integer",
+        "description": "loop length (default: whole song)"
+      },
+      "out": {
+        "type": "string",
+        "description": "also save the song (.8bt/.8bms)"
+      },
+      "wav": {
+        "type": "string",
+        "description": "render the gapless loop (wav/ogg)"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "soundpack": {
+    "type": "object",
+    "properties": {
+      "names": {
+        "type": "string",
+        "description": "comma list of sfx and/or sets (platformer, shooter, ui, rpg) or 'all'",
+        "default": "all"
+      },
+      "out": {
+        "type": "string",
+        "description": "output folder",
+        "default": "sfx"
+      },
+      "variants": {
+        "type": "integer",
+        "description": "variants per sound (deterministic)",
+        "default": 1
+      },
+      "seed": {
+        "type": "integer",
+        "description": "seed (same args + seed = same result)",
+        "default": 0
+      },
+      "sprite": {
+        "type": "boolean",
+        "description": "also write sprite.wav + sprite.json",
+        "default": true
+      },
+      "sr": {
+        "type": "integer",
+        "description": "sample rate",
+        "default": 44100
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": []
+  },
+  "stems": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "out": {
+        "type": "string",
+        "description": "folder",
+        "default": "stems"
+      },
+      "seamless": {
+        "type": "boolean",
+        "description": "loop region, tails folded (gapless)",
+        "default": false
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "master": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "out": {
+        "type": "string",
+        "description": "output file",
+        "default": "master.wav"
+      },
+      "target_db": {
+        "type": "number",
+        "description": "target RMS dBFS (~LUFS for chiptune)",
+        "default": -14.0
+      },
+      "ceiling_db": {
+        "type": "number",
+        "description": "peak ceiling dBFS",
+        "default": -1.0
+      },
+      "fade_in": {
+        "type": "number",
+        "description": "seconds",
+        "default": 0.0
+      },
+      "fade_out": {
+        "type": "number",
+        "description": "seconds",
+        "default": 0.0
+      },
+      "loop": {
+        "type": "boolean",
+        "description": "seamless loop render (no fades)",
+        "default": false
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "describe": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "critique": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "diff": {
+    "type": "object",
+    "properties": {
+      "a": {
+        "type": "string",
+        "description": "first song"
+      },
+      "b": {
+        "type": "string",
+        "description": "second song"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "a",
+      "b"
+    ]
+  },
+  "suggest": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "kind": {
+        "type": "string",
+        "description": "next | chords | groove",
+        "default": "next"
+      },
+      "track": {
+        "type": "string",
+        "description": "track name or index (default: lead)"
+      },
+      "pattern": {
+        "type": "string",
+        "description": "pattern name"
+      },
+      "k": {
+        "type": "integer",
+        "description": "how many",
+        "default": 3
+      },
+      "seed": {
+        "type": "integer",
+        "description": "seed (same args + seed = same result)",
+        "default": 0
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "humanize": {
+    "type": "object",
+    "properties": {
+      "src": {
+        "type": "string",
+        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+      },
+      "amount": {
+        "type": "number",
+        "description": "0..1",
+        "default": 0.3
+      },
+      "seed": {
+        "type": "integer",
+        "description": "seed (same args + seed = same result)",
+        "default": 0
+      },
+      "out": {
+        "type": "string",
+        "description": "also save the song (.8bt/.8bms)"
+      },
+      "wav": {
+        "type": "string",
+        "description": "also render audio (wav/ogg/mp3/flac)"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "src"
+    ]
+  },
+  "intent": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "request in plain English"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "library": {
+    "type": "object",
+    "properties": {
+      "what": {
+        "type": "string",
+        "description": "all | styles | contexts | grooves | presets | sfx",
+        "default": "all"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": []
+  },
+  "ml": {
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "description": "info | train | bench",
+        "default": "info"
+      },
+      "out": {
+        "type": "string",
+        "description": "train: where to write the model JSON"
+      },
+      "_fields": {
+        "type": "string",
+        "description": "optional: comma-separated result keys to keep (saves tokens)"
+      }
+    },
+    "required": []
+  }
+}

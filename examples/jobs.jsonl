@@ -1,0 +1,7 @@
+{"id": "theme", "op": "compose", "args": {"prompt": "mellow space exploration", "context": "space", "bars": 16, "seed": 1, "loop": true}, "fields": "handle,score"}
+{"id": "var", "op": "variation", "args": {"src": "$theme", "amount": 0.3, "seed": 2}, "fields": "handle"}
+{"id": "loop", "op": "loopify", "args": {"src": "$theme", "wav": "out/space-loop.wav", "out": "out/space-loop.8bt"}, "fields": "loop_seconds,wav"}
+{"id": "boss", "op": "compose", "args": {"context": "boss", "bars": 16, "seed": 7}, "fields": "handle,score"}
+{"id": "boss-master", "op": "master", "args": {"src": "$boss", "out": "out/boss-master.wav", "target_db": -14}, "fields": "rms_db,peak_db"}
+{"id": "sfx", "op": "soundpack", "args": {"names": "platformer", "out": "out/sfx"}, "fields": "count,manifest"}
+{"id": "notes", "op": "describe", "args": {"src": "$theme"}, "fields": "summary"}

@@ -1,0 +1,300 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/RechargedIdeas/8bit-music-code-studio/schemas/8bms.schema.json",
+  "title": "8bms project (.8bms)",
+  "type": "object",
+  "required": [
+    "format",
+    "tracks"
+  ],
+  "properties": {
+    "format": {
+      "const": "8bms"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "app": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "bpm": {
+      "type": "number",
+      "minimum": 20,
+      "maximum": 400
+    },
+    "time_sig": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "swing": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 0.75
+    },
+    "key": {
+      "type": "string"
+    },
+    "scale": {
+      "type": "string",
+      "enum": [
+        "major",
+        "minor",
+        "dorian",
+        "phrygian",
+        "lydian",
+        "mixolydian",
+        "harmonic_minor",
+        "pentatonic",
+        "minor_pentatonic",
+        "blues",
+        "chromatic"
+      ]
+    },
+    "master": {
+      "type": "number"
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "instrument",
+          "patterns"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "instrument": {
+            "type": "string",
+            "description": "preset or song-local instrument name"
+          },
+          "volume": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2
+          },
+          "pan": {
+            "type": "number",
+            "minimum": -1,
+            "maximum": 1
+          },
+          "mute": {
+            "type": "boolean"
+          },
+          "solo": {
+            "type": "boolean"
+          },
+          "drum": {
+            "type": "boolean"
+          },
+          "patterns": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "name",
+                "bars",
+                "notes"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "bars": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "notes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "start",
+                      "length",
+                      "pitch"
+                    ],
+                    "properties": {
+                      "start": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "ticks from pattern start (PPQ=96; 16th=24)"
+                      },
+                      "length": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "pitch": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 127,
+                        "description": "MIDI note (60=C4)"
+                      },
+                      "velocity": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1
+                      },
+                      "inst": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "per-note instrument (drums: kick, snare, hat...)"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "instruments": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "wave": {
+            "type": "string",
+            "description": "pulse | triangle | saw | sine | noise | any plugin wave"
+          },
+          "duty": {
+            "type": "number"
+          },
+          "noise_mode": {
+            "type": "string"
+          },
+          "attack": {
+            "type": "number"
+          },
+          "decay": {
+            "type": "number"
+          },
+          "sustain": {
+            "type": "number"
+          },
+          "release": {
+            "type": "number"
+          },
+          "volume": {
+            "type": "number"
+          },
+          "vib_depth": {
+            "type": "number"
+          },
+          "vib_rate": {
+            "type": "number"
+          },
+          "vib_delay": {
+            "type": "number"
+          },
+          "arp": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "arp_speed": {
+            "type": "number"
+          },
+          "slide": {
+            "type": "number"
+          },
+          "slide_time": {
+            "type": "number"
+          },
+          "duty_sweep": {
+            "type": "number"
+          },
+          "fixed_note": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "noise_rate": {
+            "type": "number"
+          },
+          "table": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "transpose": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "arrangement": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "track",
+          "pattern",
+          "bar"
+        ],
+        "properties": {
+          "track": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "bar": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "loop_start": {
+      "type": "integer"
+    },
+    "loop_end": {
+      "type": "integer"
+    },
+    "effects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "params": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "meta": {
+      "type": "object"
+    }
+  }
+}

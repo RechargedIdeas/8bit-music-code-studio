@@ -412,12 +412,12 @@ def user_instrument_dir() -> Path:
 
 def save_instrument(inst: Instrument, path: Optional[Path] = None) -> Path:
     path = Path(path) if path else user_instrument_dir() / f"{inst.name}.json"
-    path.write_text(json.dumps(inst.to_dict(), indent=2))
+    path.write_text(json.dumps(inst.to_dict(), indent=2), encoding="utf-8")
     return path
 
 
 def load_instrument(path: Path) -> Instrument:
-    return Instrument.from_dict(json.loads(Path(path).read_text()))
+    return Instrument.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
 def user_instruments() -> Dict[str, Instrument]:
@@ -572,7 +572,7 @@ def apply_effects(x, sr, effects, fx_table=None):
 
 
 def mix_events(events, instruments, tracks, effects, n_samples, sr=44100, master=0.8,
-               waves=None, fx_table=None, stems=False):
+               waves=None, fx_table=None, stems=False, voice_fn=None):
     """Mix compiled note events into a stereo float buffer (or per-track stems).
 
     events: dicts {t, dur, midi, vel, inst, track}; instruments: name -> dict;
@@ -581,7 +581,7 @@ def mix_events(events, instruments, tracks, effects, n_samples, sr=44100, master
     bufs = [np.zeros(n_samples) for _ in tracks]
     for ev in events:
         inst = instruments.get(ev["inst"]) or instruments.get("lead") or {}
-        v = render_voice(inst, ev["midi"], ev["dur"], ev["vel"], sr, waves)
+        v = (voice_fn or render_voice)(inst, ev["midi"], ev["dur"], ev["vel"], sr, waves)
         s0 = int(round(ev["t"] * sr))
         if s0 >= n_samples:
             continue
@@ -672,6 +672,27 @@ def render_song(song: Song, start_bar: int = 0, end_bar: Optional[int] = None, s
     result loops without a click or gap (length == exact loop length).
     """
     end_bar = song.length_bars() if end_bar is None else end_bar
+    use_cache = cache_enabled()
+    if use_cache:
+        sig = json.dumps([song.to_dict(), start_bar, end_bar, sr, tail, seamless, stems, effects,
+                          sorted((k, id(v)) for k, v in EXTRA_WAVES.items()), sorted((k, id(v)) for k, v in EXTRA_FX.items())],
+                         sort_keys=True, default=str)
+        ckey = hashlib.sha1(sig.encode()).hexdigest()
+        hit = _RENDER_CACHE.get(ckey)
+        if hit is not None:
+            RENDER_STATS["song_hits"] += 1
+            _RENDER_CACHE.move_to_end(ckey)
+            return [b.copy() for b in hit] if stems else hit.copy()
+        RENDER_STATS["song_misses"] += 1
+    res = _render_song_uncached(song, start_bar, end_bar, sr, tail, seamless, stems, effects, use_cache)
+    if use_cache:
+        _RENDER_CACHE[ckey] = [b.copy() for b in res] if stems else res.copy()
+        while len(_RENDER_CACHE) > 6:
+            _RENDER_CACHE.popitem(last=False)
+    return res
+
+
+def _render_song_uncached(song, start_bar, end_bar, sr, tail, seamless, stems, effects, use_cache=False):
     secs = (end_bar - start_bar) * song.ticks_per_bar * song.tick_seconds()
     n_exact = int(round(secs * sr))
     n = n_exact + int((tail if (tail or seamless) else 0) * sr)
@@ -679,8 +700,9 @@ def render_song(song: Song, start_bar: int = 0, end_bar: Optional[int] = None, s
         n = n_exact + int(2.0 * sr)
     evs = compile_events(song, start_bar, end_bar)
     fx = song.effects if effects else []
+    _VOICE_IKEYS.clear()
     out = mix_events(evs, instrument_dicts(song), track_dicts(song), fx, n, sr, song.master,
-                     EXTRA_WAVES, EXTRA_FX, stems)
+                     EXTRA_WAVES, EXTRA_FX, stems, cached_render_voice if use_cache else None)
 
     def fold(buf):
         if not seamless:
@@ -1857,7 +1879,7 @@ def export_code(song: Song, kind: str, path) -> Path:
     if isinstance(data, bytes):
         path.write_bytes(data)
     else:
-        path.write_text(data)
+        path.write_text(data, encoding="utf-8")
     return path
 
 
@@ -1867,10 +1889,10 @@ def export_code(song: Song, kind: str, path) -> Path:
 def save_project(song: Song, path) -> Path:
     path = Path(path)
     if path.suffix.lower() == SCORE_EXT:
-        path.write_text(song_to_score(song))
+        path.write_text(song_to_score(song), encoding="utf-8")
     else:
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(song.to_dict(), indent=1))
+        tmp.write_text(json.dumps(song.to_dict(), indent=1), encoding="utf-8")
         os.replace(tmp, path)
     add_recent(path)
     return path
@@ -1879,7 +1901,7 @@ def save_project(song: Song, path) -> Path:
 def load_project(path) -> Song:
     path = Path(path)
     ext = path.suffix.lower()
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     if ext == SCORE_EXT:
         return parse_score(text)
     if ext in IMPORTERS:
@@ -1894,6 +1916,8 @@ def load_any(src: str) -> Song:
     """Path to .8bms/.8bt/.json, 'demo', or 'gen:<style>[:bars[:seed]]'."""
     if src == "demo":
         return demo_song()
+    if src.startswith("@"):
+        return load_project(handle_path(src))
     if src.startswith("gen:"):
         p = src.split(":")
         return generate_song(p[1], int(p[2]) if len(p) > 2 else 16, int(p[3]) if len(p) > 3 else None)
@@ -1905,7 +1929,7 @@ def load_any(src: str) -> Song:
 def recent_files() -> List[str]:
     f = home_dir() / "recent.json"
     try:
-        return [p for p in json.loads(f.read_text()) if Path(p).exists()][:10]
+        return [p for p in json.loads(f.read_text(encoding="utf-8")) if Path(p).exists()][:10]
     except Exception:
         return []
 
@@ -1914,7 +1938,7 @@ def add_recent(path) -> None:
     f = home_dir() / "recent.json"
     lst = [str(Path(path).resolve())] + [p for p in recent_files() if p != str(Path(path).resolve())]
     try:
-        f.write_text(json.dumps(lst[:10]))
+        f.write_text(json.dumps(lst[:10]), encoding="utf-8")
     except OSError:
         pass
 
@@ -1936,7 +1960,12 @@ class Op:
 
     def json_schema(self) -> dict:
         tmap = {"str": "string", "int": "integer", "float": "number", "bool": "boolean", "path": "string"}
-        props = {k: {"type": tmap.get(v.get("type", "str"), "string"), "description": v.get("help", "")} for k, v in self.params.items()}
+        props = {}
+        for k, v in self.params.items():
+            props[k] = {"type": tmap.get(v.get("type", "str"), "string"), "description": v.get("help", "")}
+            if v.get("default") is not None:
+                props[k]["default"] = v["default"]
+        props["_fields"] = {"type": "string", "description": "optional: comma-separated result keys to keep (saves tokens)"}
         req = [k for k, v in self.params.items() if v.get("required")]
         return {"type": "object", "properties": props, "required": req}
 
@@ -1972,10 +2001,133 @@ def register_op(name: str, help: str = "", owner: str = "core", **params):
     return deco
 
 
+def pick_fields(res: Any, fields: Optional[str]) -> Any:
+    """Keep only some result keys: 'handle,score' (token-thrifty output)."""
+    if not fields or not isinstance(res, dict):
+        return res
+    keep = [f.strip() for f in str(fields).split(",") if f.strip()]
+    return {k: res[k] for k in keep if k in res}
+
+
 def run_op(name: str, **kwargs) -> dict:
     if name not in OPS:
         raise KeyError(f"unknown op {name!r}; have {', '.join(sorted(OPS))}")
-    return OPS[name](**kwargs)
+    fields = kwargs.pop("_fields", None)
+    return pick_fields(OPS[name](**kwargs), fields)
+
+
+_LEGACY_CLI = {"export": "8bms export <src> [--js|--py|--json|--score|--project PATH] [--to KIND -o PATH]",
+               "score_help": "8bms score-help", "render": "8bms render <src> [-o out.wav] [--loop] [--seamless] [--bars 1-8] [--stems DIR]",
+               "gen": "8bms gen [--style S] [--bars N] [--seed N] [--key K] [--bpm N] [-o out.8bt] [--wav out.wav]"}
+
+
+def op_tools() -> List[dict]:
+    """Every op as a tool card (MCP-style) with its CLI form: `8bms tools --json`."""
+    out = []
+    for n, o in OPS.items():
+        pos = [k for k, v in o.params.items() if v.get("pos")]
+        flags = [f"--{k.replace('_', '-')}" for k in o.params if k not in pos]
+        out.append({"name": n, "description": o.help, "owner": o.owner, "inputSchema": o.json_schema(),
+                    "cli": _LEGACY_CLI.get(n) or (f"8bms {n} " + " ".join([f"<{k}>" for k in pos] + [f"[{f}]" for f in flags])),
+                    "http": f"POST /ops/{n}", "mcp": n, "slash": f"/{n}"})
+    return out
+
+
+def openapi_spec() -> dict:
+    paths: Dict[str, Any] = {
+        "/health": {"get": {"summary": "liveness", "responses": {"200": {"description": "ok"}}}},
+        "/ops": {"get": {"summary": "list ops with JSON schemas", "responses": {"200": {"description": "op map"}}}},
+        "/tools": {"get": {"summary": "tool cards (same as `8bms tools --json`)", "responses": {"200": {"description": "list"}}}},
+        "/openapi.json": {"get": {"summary": "this document", "responses": {"200": {"description": "OpenAPI 3.1"}}}},
+        "/prompt": {"post": {"summary": "stateful studio: notes, .8bt lines, /commands or English",
+                             "requestBody": {"content": {"application/json": {"schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}}},
+                             "responses": {"200": {"description": "{reply}"}}}},
+    }
+    for n, o in OPS.items():
+        paths[f"/ops/{n}"] = {"post": {"operationId": n, "summary": o.help, "tags": [o.owner],
+                                       "requestBody": {"required": True, "content": {"application/json": {"schema": o.json_schema()}}},
+                                       "responses": {"200": {"description": "result object", "content": {"application/json": {"schema": {"type": "object"}}}},
+                                                     "400": {"description": "{error}"}}}}
+    return {"openapi": "3.1.0", "info": {"title": f"{APP_NAME} HTTP API", "version": APP_VERSION,
+                                         "description": "Start with `8bms serve` (default http://127.0.0.1:8765). One registry powers CLI, HTTP, MCP and ACP."},
+            "servers": [{"url": "http://127.0.0.1:8765"}], "paths": paths}
+
+
+def project_json_schema() -> dict:
+    """JSON Schema for .8bms project files (Song.to_dict)."""
+    tmap = {"str": "string", "float": "number", "int": "integer", "List[int]": "array", "Optional[int]": ["integer", "null"]}
+    inst_props = {}
+    for f in dataclasses.fields(Instrument):
+        t = tmap.get(str(f.type).replace("typing.", ""), "number")
+        inst_props[f.name] = {"type": t} if t != "array" else {"type": "array", "items": {"type": "integer"}}
+    inst_props["wave"]["description"] = "pulse | triangle | saw | sine | noise | any plugin wave"
+    note = {"type": "object", "required": ["start", "length", "pitch"], "properties": {
+        "start": {"type": "integer", "minimum": 0, "description": f"ticks from pattern start (PPQ={PPQ}; 16th={_SIX})"},
+        "length": {"type": "integer", "minimum": 1}, "pitch": {"type": "integer", "minimum": 0, "maximum": 127, "description": "MIDI note (60=C4)"},
+        "velocity": {"type": "number", "minimum": 0, "maximum": 1}, "inst": {"type": ["string", "null"], "description": "per-note instrument (drums: kick, snare, hat...)"}}}
+    pattern = {"type": "object", "required": ["name", "bars", "notes"], "properties": {
+        "name": {"type": "string"}, "bars": {"type": "integer", "minimum": 1}, "notes": {"type": "array", "items": note}}}
+    track = {"type": "object", "required": ["name", "instrument", "patterns"], "properties": {
+        "name": {"type": "string"}, "kind": {"type": "string"}, "instrument": {"type": "string", "description": "preset or song-local instrument name"},
+        "volume": {"type": "number", "minimum": 0, "maximum": 2}, "pan": {"type": "number", "minimum": -1, "maximum": 1},
+        "mute": {"type": "boolean"}, "solo": {"type": "boolean"}, "drum": {"type": "boolean"},
+        "patterns": {"type": "object", "additionalProperties": pattern}}}
+    return {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://github.com/RechargedIdeas/8bit-music-code-studio/schemas/8bms.schema.json",
+            "title": "8bms project (.8bms)", "type": "object", "required": ["format", "tracks"],
+            "properties": {
+                "format": {"const": "8bms"}, "version": {"type": "integer"}, "app": {"type": "string"}, "title": {"type": "string"},
+                "bpm": {"type": "number", "minimum": 20, "maximum": 400}, "time_sig": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
+                "swing": {"type": "number", "minimum": 0, "maximum": 0.75}, "key": {"type": "string"}, "scale": {"type": "string", "enum": list(SCALES)},
+                "master": {"type": "number"}, "tracks": {"type": "array", "items": track},
+                "instruments": {"type": "object", "additionalProperties": {"type": "object", "properties": inst_props}},
+                "arrangement": {"type": "array", "items": {"type": "object", "required": ["track", "pattern", "bar"], "properties": {
+                    "track": {"type": "integer", "minimum": 0}, "pattern": {"type": "string"}, "bar": {"type": "integer", "minimum": 0}}}},
+                "loop_start": {"type": "integer"}, "loop_end": {"type": "integer"},
+                "effects": {"type": "array", "items": {"type": "object", "required": ["type"], "properties": {
+                    "type": {"type": "string"}, "enabled": {"type": "boolean"}, "params": {"type": "object"}}}},
+                "meta": {"type": "object"}}}
+
+
+def score_json_schema() -> dict:
+    """.8bt is line-based text; this schema validates the text and documents each statement as a regex."""
+    stmts = {
+        "title": r"^title\s+.+$", "bpm": r"^bpm\s+\d+(\.\d+)?$", "time": r"^time\s+\d+/\d+$", "swing": r"^swing\s+[0-9.]+$",
+        "key": r"^key\s+[A-Ga-g][#b]?\s*(" + "|".join(SCALES) + r")?$", "master": r"^master\s+[0-9.]+$", "loop": r"^loop\s+\d+-\d+$",
+        "fx": r"^fx\s+\w+(\s+\w+=[-0-9.]+)*$", "inst": r"^inst\s+[\w-]+(\s+\w+)?(\s+\w+=\S+)*$",
+        "track": r"^track\s+[\w-]+(\s+(drum|mute|solo|[\w-]+=\S+))*$",
+        "pat": r"^pat\s+[^\s:]+(\s+[\w-]+=\S+)*\s*:.*$", "arr": r"^arr\s+[\w-]+\s*:.*$"}
+    return {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://github.com/RechargedIdeas/8bit-music-code-studio/schemas/8bt.schema.json",
+            "title": "8bms score (.8bt)", "description": SCORE_HELP + "\nValidate semantically with `8bms check file.8bt`.",
+            "type": "string", "minLength": 1, "x-line-comment": "#", "x-statement-separator": ";",
+            "x-statements": {k: {"pattern": v} for k, v in stmts.items()},
+            "x-note-language": "pattern bodies use the note language - see docs/note-language.md",
+            "examples": [song_to_score(demo_song()).split("\npat")[0]]}
+
+
+def run_batch(lines: Iterable[str]) -> Iterable[dict]:
+    """jobs.jsonl: {"id": "x", "op": "compose", "args": {...}, "fields": "handle,score"} per line -> result per line.
+    Use "$prev" (or "$<id>") in args to reference an earlier job's handle."""
+    handles: Dict[str, str] = {}
+    prev = None
+    for i, line in enumerate(lines):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        jid = str(i + 1)
+        try:
+            job = json.loads(line)
+            jid = str(job.get("id", jid))
+            args = {}
+            for k, v in (job.get("args") or {}).items():
+                if isinstance(v, str) and v.startswith("$"):
+                    v = prev if v == "$prev" else handles.get(v[1:], v)
+                args[k] = v
+            res = run_op(job["op"], **args)
+            if isinstance(res, dict) and "handle" in res:
+                prev = handles[jid] = res["handle"]
+            yield {"id": jid, "ok": True, "result": pick_fields(res, job.get("fields"))}
+        except Exception as e:
+            yield {"id": jid, "ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 def _parse_bars(bars: Optional[str], song: Song) -> Tuple[int, int]:
@@ -1986,7 +2138,7 @@ def _parse_bars(bars: Optional[str], song: Song) -> Tuple[int, int]:
 
 
 @register_op("render", "Render a song to audio (wav/ogg/mp3/flac).",
-             src={"type": "str", "required": True, "help": "file .8bt/.8bms, 'demo' or gen:style:bars:seed"},
+             src={"type": "str", "required": True, "pos": True, "help": "file .8bt/.8bms, 'demo' or gen:style:bars:seed"},
              out={"type": "path", "default": "out.wav", "help": "output file (extension picks format)"},
              loop={"type": "bool", "default": False, "help": "render only the loop region"},
              seamless={"type": "bool", "default": False, "help": "gapless loop file: loop region (or --bars) with the tail folded into the start"},
@@ -2008,7 +2160,7 @@ def op_render(src, out="out.wav", loop=False, seamless=False, bars=None, stems=N
 
 
 @register_op("export", "Export a song as code/data: js, py, json, score (.8bt), project (.8bms) or plugin formats.",
-             src={"type": "str", "required": True, "help": "song source"},
+             src={"type": "str", "required": True, "pos": True, "help": "song source"},
              kind={"type": "str", "required": True, "help": "exporter name"},
              out={"type": "path", "default": None, "help": "output path (default from title)"})
 def op_export(src, kind, out=None):
@@ -2041,7 +2193,7 @@ def op_gen(style="mellow-space", bars=16, seed=None, key=None, bpm=None, out=Non
     return res
 
 
-@register_op("info", "Summarize a song.", src={"type": "str", "required": True, "help": "song source"})
+@register_op("info", "Summarize a song.", src={"type": "str", "required": True, "pos": True, "help": "song source"})
 def op_info(src):
     s = load_any(src) if isinstance(src, str) else src
     a, b = s.loop_range()
@@ -2051,7 +2203,7 @@ def op_info(src):
             "tracks": [f"{t.name}({t.instrument},{'drum,' if t.drum else ''}{len(t.patterns)}p)" for t in s.tracks]}
 
 
-@register_op("check", "Validate a score/project; returns ok or the first error.", src={"type": "str", "required": True, "help": "file"})
+@register_op("check", "Validate a score/project; returns ok or the first error.", src={"type": "str", "required": True, "pos": True, "help": "file"})
 def op_check(src):
     s = load_any(src)
     return {"ok": True, "bars": s.length_bars(), "notes": s.note_count()}
@@ -2230,13 +2382,17 @@ class Interpreter:
         low = line.lower()
         bars_m = re.search(r"(\d+)\s*bars?", low)
         bpm_m = re.search(r"(\d{2,3})\s*bpm", low)
-        if re.search(r"\b(make|generate|compose|create|write|gen)\b", low) and re.search(r"\b(song|track|tune|loop|music|beat|theme|soundtrack)\b", low):
+        if re.search(r"\b(make|generate|compose|create|write|gen)\b", low) and re.search(r"\b(song|track|tune|loop|music|beat|theme|soundtrack)\b", low) \
+                and not re.search(r"\b(make|turn|render|export)\s+(it|this|that)\b", low):
             style = next((st for st, words in STYLE_WORDS if any(w in low for w in words)), "upbeat")
             style = next((st for st in style_names() if st in low), style)
+            slots = parse_intent(line)["slots"]
+            if "context" in slots and not any(st in low for st in style_names()):
+                style = None
             seed_m = re.search(r"seed\s*(\d+)", low)
-            key_m = re.search(r"\bin ([a-g][#b]?)\b", low)
-            return self.slash(f"gen {style} {bars_m.group(1) if bars_m else 16} {seed_m.group(1) if seed_m else ''} "
-                              f"{('key=' + key_m.group(1).upper()) if key_m else ''} {('bpm=' + bpm_m.group(1)) if bpm_m else ''}")
+            kw = {"prompt": line, "style": style, "bars": int(bars_m.group(1)) if bars_m else None,
+                  "seed": int(seed_m.group(1)) if seed_m else 0, "bpm": float(bpm_m.group(1)) if bpm_m else None, "candidates": 3}
+            return self.run_song_op("compose", {k: v for k, v in kw.items() if v is not None})
         if re.fullmatch(r"(make it |a bit |much )*(faster|speed up)!?", low):
             self.snapshot(); self.song.bpm = min(300, self.song.bpm + 10); return "ok " + self.summary()
         if re.fullmatch(r"(make it |a bit |much )*(slower|slow down)!?", low):
@@ -2269,7 +2425,30 @@ class Interpreter:
             return self.slash("show")
         if low in ("help", "?", "commands"):
             return HELP_TEXT
+        it = parse_intent(line)
+        if it["op"] in OPS and it["confidence"] >= 0.55 and it["op"] not in ("diff", "render"):
+            args = dict(it["args"])
+            if it["op"] in ("master", "soundpack", "stems"):
+                args.setdefault("out", str(self.path(None, "8bms-out/" + _slug(self.song.title) + {"master": ".master.wav", "soundpack": "-sfx", "stems": "-stems"}[it["op"]])))
+            return f"[{it['op']}] " + self.run_song_op(it["op"], args)
         return None
+
+    def run_song_op(self, name: str, kw: dict) -> str:
+        """Run a registry op against the current song; song-producing ops replace it (undoable)."""
+        op = OPS[name]
+        if "src" in op.params and "src" not in kw:
+            kw = dict(kw, src=self.song)
+        res = self.tool(f"Op {name}", "other", lambda: run_op(name, **kw), {k: v for k, v in kw.items() if not isinstance(v, Song)})
+        if name in SONG_OPS and "handle" in res:
+            self.snapshot()
+            self.song = load_project(handle_path(res["handle"]))
+            self.track, self.pattern = 0, next(iter(self.song.tracks[0].patterns), "A") if self.song.tracks else "A"
+            return f"ok {res['handle']} " + self.summary() + (f" score={res['score']}" if "score" in res else "")
+        if name == "describe":
+            return res.get("summary", _terse(res))
+        if name == "critique":
+            return f"score={res.get('score')}/100" + ("; tips: " + "; ".join(res.get("tips", [])) if res.get("tips") else "")
+        return _terse(res)
 
     def slash(self, cmd: str) -> str:
         parts = cmd.split()
@@ -2392,8 +2571,19 @@ class Interpreter:
                 apply_score(s, out)
             return "ok " + self.summary()
         if name in OPS:
-            res = self.tool(f"Op {name}", "other", lambda: run_op(name, **({"src": s} if "src" in OPS[name].params and "src" not in kv else {}), **kv), kv)
-            return _terse(res)
+            kw: Dict[str, Any] = dict(kv)
+            for f in flags:
+                kw[f.replace("-", "_")] = True
+            pparams = [k for k, v in OPS[name].params.items() if v.get("pos")]
+            if pos:
+                if pparams and pparams[0] == "src" and len(pparams) == 1:
+                    kw.setdefault("src", pos[0])
+                elif pparams and pparams[0] != "src":
+                    kw.setdefault(pparams[0], " ".join(pos))
+                elif pparams:
+                    for k, v in zip(pparams, pos):
+                        kw.setdefault(k, v)
+            return self.run_song_op(name, kw)
         return f"unknown command /{name}. Type /help."
 
 
@@ -2405,7 +2595,7 @@ def _terse(res: Any) -> str:
     if isinstance(res, dict):
         if "text" in res and len(res) == 1:
             return res["text"]
-        if "score" in res:
+        if isinstance(res.get("score"), str):
             return res["score"]
         parts = []
         for k, v in res.items():
@@ -2427,7 +2617,1430 @@ Slash commands:
   /new /demo /gen <style> [bars] [seed] /load <f> /save <f> /show /info /track <name> /pat <name>
   /bpm N /key C minor /transpose N /clear /undo /render [f] [--loop] [--seamless] /stems [dir]
   /export <js|py|json|score|project> [f] /presets /styles /roll /viz <name> /op <op> k=v /ml <backend> <prompt>
+Intent ops (act on the current song; plain English works too: "make it loop", "critique this"):
+  /compose <prompt> [context=boss bars=16 seed=1]  /variation [amount=.3]  /extend [bars=8]  /remix style=<s>
+  /loopify  /humanize  /arrange  /describe  /critique  /suggest [kind=next|chords|groove]  /stems [out=dir]
+  /master [out=f.wav]  /soundpack <names|set>  /library <styles|contexts|sfx>  /intent <text>
 """
+
+
+# ---------------------------------------------------------------------------
+# Agent framework (1/3): style + preset library, game contexts, SFX, handles
+# ---------------------------------------------------------------------------
+GROOVES.update({
+    "march": {"kick": "x.......x.......", "snare": "....x.x.....x.x.", "hat": "x.x.x.x.x.x.x.x."},
+    "shuffle": {"kick": "x.....x.x.......", "snare": "....x.......x...", "hat": "x..x.xx..x.xx..x"},
+    "sparse": {"kick": "x...............", "hat": "........x......."},
+})
+STYLES.update({
+    "title": {"bpm": (112, 124), "scale": "major", "keys": ["C", "D", "Eb"], "prog": [[0, 3, 4, 0], [0, 5, 3, 4], [3, 4, 5, 4]],
+              "lead": "lead50", "harm": "arp", "bass": "bass", "bass_style": "octave", "groove": "march", "density": 0.6, "swing": 0.0,
+              "fx": {"echo": {"time": 0.25, "feedback": 0.25, "mix": 0.18}}},
+    "gameover": {"bpm": (66, 76), "scale": "minor", "keys": ["A", "D", "E"], "prog": [[0, 5, 3, 4], [0, 3, 4, 4]],
+                 "lead": "flute", "harm": "pad", "bass": "bass", "bass_style": "half", "groove": "none", "density": 0.3, "swing": 0.0,
+                 "fx": {"echo": {"time": 0.45, "feedback": 0.4, "mix": 0.3}}},
+    "puzzle": {"bpm": (96, 108), "scale": "dorian", "keys": ["D", "G"], "prog": [[0, 3, 0, 4], [0, 6, 3, 4]],
+               "lead": "bell", "harm": "blip", "bass": "bass", "bass_style": "walk", "groove": "shuffle", "density": 0.5, "swing": 0.1, "fx": {}},
+    "underwater": {"bpm": (70, 82), "scale": "lydian", "keys": ["F", "C"], "prog": [[0, 1, 0, 1], [0, 4, 1, 0]],
+                   "lead": "flute", "harm": "arp", "bass": "bass", "bass_style": "half", "groove": "sparse", "density": 0.35, "swing": 0.0,
+                   "fx": {"echo": {"time": 0.5, "feedback": 0.45, "mix": 0.3}, "lowpass": {"cutoff": 3500}}},
+    "stealth": {"bpm": (90, 100), "scale": "minor", "keys": ["A", "E"], "prog": [[0, 0, 5, 5], [0, 1, 0, 5]],
+                "lead": "thin", "harm": "pad", "bass": "pulsebass", "bass_style": "root8", "groove": "sparse", "density": 0.3, "swing": 0.0,
+                "fx": {"lowpass": {"cutoff": 4000}}},
+    "credits": {"bpm": (104, 112), "scale": "mixolydian", "keys": ["G", "D"], "prog": [[0, 6, 3, 0], [0, 3, 6, 0]],
+                "lead": "lead", "harm": "arp", "bass": "bass", "bass_style": "walk", "groove": "bounce", "density": 0.55, "swing": 0.1,
+                "fx": {"echo": {"time": 0.3, "feedback": 0.3, "mix": 0.2}}},
+})
+CORE_STYLES = sorted(STYLES)          # snapshot before plugins: used for deterministic ML training
+STYLE_WORDS += [("title", ["title", "intro", "opening", "attract"]), ("gameover", ["game over", "gameover", "defeat", "sad", "lose"]),
+                ("puzzle", ["puzzle", "think", "quirky"]), ("underwater", ["underwater", "water", "ocean", "sea"]),
+                ("stealth", ["stealth", "sneak", "spy"]), ("credits", ["credits", "ending", "outro"])]
+
+# context -> style/bars/bpm. bpm None = style default range. loop False = one-shot jingle.
+GAME_CONTEXTS: Dict[str, dict] = {
+    "title-screen": {"style": "title", "bars": 16, "bpm": None, "loop": True, "desc": "title / attract loop: confident, hooky"},
+    "menu": {"style": "chill", "bars": 8, "bpm": 92, "loop": True, "desc": "menus and options: unobtrusive loop"},
+    "overworld": {"style": "upbeat", "bars": 16, "bpm": 132, "loop": True, "desc": "exploration theme: bright, long loop"},
+    "town": {"style": "town", "bars": 16, "bpm": None, "loop": True, "desc": "town / village: cosy, bouncy, swung"},
+    "shop": {"style": "town", "bars": 8, "bpm": 104, "loop": True, "desc": "shop: short friendly loop"},
+    "forest": {"style": "chill", "bars": 16, "bpm": 96, "loop": True, "desc": "forest / field: relaxed dorian"},
+    "dungeon": {"style": "dungeon", "bars": 16, "bpm": None, "loop": True, "desc": "dungeon: dark phrygian, sparse"},
+    "cave": {"style": "dungeon", "bars": 8, "bpm": 84, "loop": True, "desc": "cave: dark, echoey, short"},
+    "castle": {"style": "boss", "bars": 16, "bpm": 136, "loop": True, "desc": "castle: harmonic minor, driving"},
+    "battle": {"style": "chase", "bars": 16, "bpm": 164, "loop": True, "desc": "regular battle: fast minor rock"},
+    "boss": {"style": "boss", "bars": 16, "bpm": None, "loop": True, "desc": "boss fight: intense harmonic minor"},
+    "final-boss": {"style": "boss", "bars": 32, "bpm": 176, "loop": True, "desc": "final boss: longest, fastest"},
+    "chase": {"style": "chase", "bars": 16, "bpm": None, "loop": True, "desc": "chase / escape: urgent"},
+    "puzzle": {"style": "puzzle", "bars": 16, "bpm": None, "loop": True, "desc": "puzzle room: quirky shuffle"},
+    "stealth": {"style": "stealth", "bars": 16, "bpm": None, "loop": True, "desc": "stealth: quiet, tense"},
+    "underwater": {"style": "underwater", "bars": 16, "bpm": None, "loop": True, "desc": "underwater: floaty lydian"},
+    "space": {"style": "mellow-space", "bars": 16, "bpm": None, "loop": True, "desc": "space / stars: mellow, echoey"},
+    "lofi-break": {"style": "chill", "bars": 16, "bpm": None, "loop": True, "desc": "break / save room: lo-fi chill"},
+    "credits": {"style": "credits", "bars": 32, "bpm": None, "loop": False, "desc": "end credits: warm mixolydian"},
+    "victory": {"style": "victory", "bars": 4, "bpm": None, "loop": False, "desc": "victory jingle"},
+    "level-clear": {"style": "victory", "bars": 2, "bpm": 140, "loop": False, "desc": "level-clear stinger"},
+    "game-over": {"style": "gameover", "bars": 4, "bpm": None, "loop": False, "desc": "game-over jingle"},
+    "cutscene-sad": {"style": "gameover", "bars": 8, "bpm": 72, "loop": True, "desc": "sad cutscene"},
+}
+CONTEXT_WORDS = {"title-screen": ["title", "start screen", "attract", "main menu theme"], "menu": ["menu", "options", "settings"],
+                 "overworld": ["overworld", "world map", "exploration", "explore", "adventure", "level 1", "platformer"],
+                 "town": ["town", "village", "city"], "shop": ["shop", "store", "merchant"], "forest": ["forest", "field", "meadow", "woods"],
+                 "dungeon": ["dungeon", "crypt", "spooky"], "cave": ["cave", "mine"], "castle": ["castle", "fortress"],
+                 "battle": ["battle", "fight", "combat", "enemy"], "boss": ["boss"], "final-boss": ["final boss", "last boss"],
+                 "chase": ["chase", "escape", "race", "run"], "puzzle": ["puzzle"], "stealth": ["stealth", "sneak"],
+                 "underwater": ["underwater", "ocean", "sea", "water level"], "space": ["space", "galaxy", "stars", "orbit", "cosmic"],
+                 "lofi-break": ["lofi", "lo-fi", "save room", "rest"], "credits": ["credits", "ending"], "victory": ["victory", "win", "fanfare"],
+                 "level-clear": ["level clear", "stage clear", "stinger"], "game-over": ["game over", "gameover", "defeat"],
+                 "cutscene-sad": ["sad", "cutscene", "funeral"]}
+
+
+def resolve_context(name: Optional[str]) -> Optional[str]:
+    if not name:
+        return None
+    n = name.strip().lower().replace("_", "-").replace(" ", "-")
+    if n in GAME_CONTEXTS:
+        return n
+    for ctx, words in CONTEXT_WORDS.items():
+        if n.replace("-", " ") in words:
+            return ctx
+    raise ValueError(f"unknown context {name!r}; try: {', '.join(GAME_CONTEXTS)}")
+
+
+# SFX recipes: instrument overrides on top of the 'blip' preset + a sequence of (note, seconds)
+SFX: Dict[str, Tuple[dict, List[Tuple[str, float]], str]] = {
+    "jump": ({"duty": 0.25, "slide": 12, "slide_time": 0.14, "decay": 0.16, "sustain": 0.0, "release": 0.03}, [("C5", 0.14)], "platformer jump"),
+    "coin": ({"duty": 0.5, "decay": 0.3, "sustain": 0.0, "release": 0.05}, [("B5", 0.06), ("E6", 0.3)], "pickup / coin"),
+    "powerup": ({"duty": 0.25, "arp": [0, 4, 7, 12], "arp_speed": 28, "slide": 12, "slide_time": 0.5, "decay": 0.6, "sustain": 0.3, "release": 0.08},
+                [("C5", 0.55)], "power-up"),
+    "1up": ({"duty": 0.5, "decay": 0.08, "sustain": 0.6, "release": 0.03},
+            [("E6", .08), ("G6", .08), ("E7", .08), ("C7", .08), ("D7", .08), ("G7", .12)], "extra life"),
+    "laser": ({"duty": 0.125, "slide": -24, "slide_time": 0.18, "duty_sweep": -1.0, "decay": 0.2, "sustain": 0.0, "release": 0.03}, [("A6", 0.18)], "shot / laser"),
+    "explosion": ({"wave": "noise", "noise_mode": "long", "slide": -24, "slide_time": 0.6, "decay": 0.7, "sustain": 0.0, "release": 0.2, "volume": 0.8},
+                  [("C5", 0.7)], "explosion"),
+    "hit": ({"wave": "noise", "noise_mode": "short", "slide": -12, "slide_time": 0.08, "decay": 0.09, "sustain": 0.0, "release": 0.02, "volume": 0.7},
+            [("C6", 0.08)], "enemy hit"),
+    "hurt": ({"duty": 0.5, "slide": -7, "slide_time": 0.2, "vib_depth": 0.8, "vib_rate": 30, "decay": 0.25, "sustain": 0.2, "release": 0.04},
+             [("E5", 0.22)], "player hurt"),
+    "select": ({"duty": 0.25, "decay": 0.05, "sustain": 0.0, "release": 0.01}, [("A5", 0.04)], "UI select"),
+    "confirm": ({"duty": 0.5, "decay": 0.1, "sustain": 0.4, "release": 0.04}, [("C6", 0.06), ("G6", 0.14)], "UI confirm"),
+    "cancel": ({"duty": 0.5, "decay": 0.1, "sustain": 0.4, "release": 0.04}, [("G5", 0.06), ("C5", 0.14)], "UI cancel / back"),
+    "pause": ({"duty": 0.5, "decay": 0.06, "sustain": 0.5, "release": 0.02}, [("E6", .06), ("C6", .06), ("E6", .06), ("C6", .1)], "pause"),
+    "menu-move": ({"wave": "triangle", "decay": 0.04, "sustain": 0.0, "release": 0.01, "volume": 0.9}, [("G5", 0.035)], "cursor move"),
+    "text-blip": ({"duty": 0.25, "decay": 0.02, "sustain": 0.0, "release": 0.005, "volume": 0.4}, [("C6", 0.02)], "dialogue text"),
+    "error": ({"duty": 0.5, "decay": 0.1, "sustain": 0.7, "release": 0.03}, [("C3", 0.09), ("B2", 0.16)], "error / denied"),
+    "door": ({"wave": "triangle", "slide": -5, "slide_time": 0.2, "decay": 0.2, "sustain": 0.0, "release": 0.05, "volume": 0.9}, [("C3", 0.2)], "door"),
+    "step": ({"wave": "noise", "noise_mode": "long", "decay": 0.03, "sustain": 0.0, "release": 0.01, "noise_rate": 1.5, "volume": 0.5}, [("C5", 0.03)], "footstep"),
+    "death": ({"duty": 0.5, "slide": -24, "slide_time": 0.9, "vib_depth": 0.5, "vib_rate": 12, "decay": 1.0, "sustain": 0.5, "release": 0.1},
+              [("G5", 0.9)], "player death"),
+    "warp": ({"duty": 0.125, "slide": 24, "slide_time": 0.6, "vib_depth": 3, "vib_rate": 14, "decay": 0.6, "sustain": 0.5, "release": 0.1},
+             [("C4", 0.6)], "teleport / warp"),
+    "bomb-drop": ({"duty": 0.5, "slide": -36, "slide_time": 0.8, "decay": 0.9, "sustain": 0.6, "release": 0.05}, [("C7", 0.8)], "falling bomb"),
+    "shield": ({"wave": "triangle", "arp": [0, 7, 12], "arp_speed": 40, "vib_depth": 0.3, "vib_rate": 8, "decay": 0.4, "sustain": 0.5, "release": 0.1,
+                "volume": 0.9}, [("C5", 0.4)], "shield up"),
+    "heal": ({"wave": "sine", "decay": 0.1, "sustain": 0.6, "release": 0.05, "volume": 0.7}, [("C5", .06), ("E5", .06), ("G5", .06), ("C6", .2)], "heal"),
+    "alarm": ({"duty": 0.5, "decay": 0.05, "sustain": 0.8, "release": 0.02}, [("A5", .15), ("E5", .15), ("A5", .15), ("E5", .15)], "alarm"),
+    "levelup": ({"duty": 0.25, "decay": 0.06, "sustain": 0.6, "release": 0.03},
+                [("C5", .05), ("E5", .05), ("G5", .05), ("C6", .05), ("E6", .05), ("G6", .05), ("C7", .25)], "level up"),
+    "thunder": ({"wave": "noise", "noise_mode": "long", "noise_rate": 0.6, "attack": 0.01, "decay": 1.4, "sustain": 0.0, "release": 0.4, "volume": 0.8},
+                [("C3", 1.4)], "thunder / rumble"),
+    "splash": ({"wave": "noise", "noise_mode": "long", "slide": 12, "slide_time": 0.3, "attack": 0.02, "decay": 0.35, "sustain": 0.0, "release": 0.1,
+                "volume": 0.6}, [("C4", 0.35)], "water splash"),
+}
+SFX_SETS = {"platformer": ["jump", "coin", "powerup", "1up", "hit", "hurt", "death", "door", "step", "levelup"],
+            "shooter": ["laser", "explosion", "hit", "hurt", "shield", "powerup", "warp", "bomb-drop", "alarm", "death"],
+            "ui": ["select", "confirm", "cancel", "pause", "menu-move", "text-blip", "error"],
+            "rpg": ["heal", "levelup", "door", "step", "hit", "hurt", "coin", "confirm", "cancel", "text-blip"]}
+
+
+def render_sfx(name: str, seed: Optional[int] = None, sr: int = SR) -> np.ndarray:
+    """Render one SFX (mono float). seed>0 gives a deterministic variant (pitch/length jitter)."""
+    if name not in SFX:
+        raise ValueError(f"unknown sfx {name!r}; have {', '.join(SFX)}")
+    over, seq, _ = SFX[name]
+    inst = PRESETS["blip"].to_dict()
+    inst.update(volume=0.8)
+    inst.update(copy.deepcopy(over))
+    shift, stretch = 0, 1.0
+    if seed:
+        rng = random.Random(f"{name}:{seed}")
+        shift, stretch = rng.choice([-3, -2, -1, 1, 2, 3]), rng.uniform(0.88, 1.12)
+    parts, t = [], 0.0
+    total = sum(d for _, d in seq) * stretch + inst.get("release", 0.05) + 0.02
+    out = np.zeros(int(total * sr) + 1)
+    for nn, d in seq:
+        v = render_voice(inst, parse_note_name(nn) + shift, d * stretch, 0.9, sr, EXTRA_WAVES)
+        s0 = int(t * sr)
+        v = v[: len(out) - s0]
+        out[s0:s0 + len(v)] += v
+        t += d * stretch
+    pk = float(np.max(np.abs(out))) or 1.0
+    return out * (0.89 / pk)
+
+
+# Handles: tiny ids for songs so agents pass "@3f9a01bc" instead of whole scores
+def handles_dir() -> Path:
+    d = home_dir() / "handles"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def put_handle(song: Song) -> str:
+    data = json.dumps(song.to_dict(), sort_keys=True, separators=(",", ":"))
+    h = hashlib.sha1(data.encode()).hexdigest()[:8]
+    (handles_dir() / f"{h}.8bms").write_text(data, encoding="utf-8")
+    (handles_dir() / "last").write_text(h, encoding="utf-8")
+    return "@" + h
+
+
+def handle_path(h: str) -> Path:
+    h = h.lstrip("@")
+    if h in ("", "last"):
+        lp = handles_dir() / "last"
+        if not lp.exists():
+            raise FileNotFoundError("no songs yet: run an op like compose first")
+        h = lp.read_text(encoding="utf-8").strip()
+    p = handles_dir() / f"{h}.8bms"
+    if not p.exists():
+        raise FileNotFoundError(f"no handle @{h}")
+    return p
+
+
+def _song(src: Any) -> Song:
+    return src.copy() if isinstance(src, Song) else load_any(str(src))
+
+
+def _finish(song: Song, out: Optional[str] = None, wav: Optional[str] = None, seamless: bool = False, **extra) -> dict:
+    res: Dict[str, Any] = {"handle": put_handle(song), "title": song.title, "bars": song.length_bars(), "bpm": song.bpm,
+                           "key": f"{song.key} {song.scale}", "notes": song.note_count()}
+    res.update(extra)
+    if out:
+        res["path"] = str(save_project(song, out).resolve())
+    if wav:
+        r = op_render(song, wav, loop=seamless, seamless=seamless)
+        res["wav"], res["seconds"] = r["path"], r["seconds"]
+    return res
+
+
+def lead_track(song: Song) -> Optional[int]:
+    best, bscore = None, -1e9
+    for i, t in enumerate(song.tracks):
+        if t.drum:
+            continue
+        notes = [n for p in t.patterns.values() for n in p.notes]
+        if not notes:
+            continue
+        if t.name.lower() in ("lead", "melody", "main"):
+            return i
+        sc = sum(n.pitch for n in notes) / len(notes) - 6 * (max(len({n.start for n in notes}), 1) < len(notes) * 0.6)
+        if sc > bscore:
+            best, bscore = i, sc
+    return best
+
+
+def to_degree(pitch: int, root_pc: int, scale: str) -> Tuple[int, bool]:
+    """MIDI pitch -> (scale degree counted from C-1 octave of root, exactly in scale?)."""
+    sc = SCALES.get(scale, SCALES["major"])
+    rel = pitch - root_pc
+    o, pc = divmod(rel, 12)
+    idx = min(range(len(sc)), key=lambda i: abs(sc[i] - pc))
+    return o * len(sc) + idx, sc[idx] == pc
+
+
+def bar_notes(song: Song, include: Optional[Callable[[int, Track], bool]] = None) -> List[List[Tuple[int, Note, int]]]:
+    """Per absolute bar: [(track_index, note, abs_tick)] from the arrangement."""
+    tpb = song.ticks_per_bar
+    bars: List[List[Tuple[int, Note, int]]] = [[] for _ in range(song.length_bars())]
+    for c in song.arrangement:
+        p = song.pattern_of(c)
+        if p is None or (include and not include(c.track, song.tracks[c.track])):
+            continue
+        for n in p.notes:
+            if n.start >= p.bars * tpb:
+                continue
+            at = c.bar * tpb + n.start
+            b = at // tpb
+            if 0 <= b < len(bars):
+                bars[b].append((c.track, n, at))
+    return bars
+
+
+# ---------------------------------------------------------------------------
+# Agent framework (2/3): tiny offline ML. CPU-only, deterministic, no deps
+# beyond numpy, trained in <1 s on a corpus this program generates itself.
+# See docs/ml.md for the design and what is implemented vs design-only.
+# ---------------------------------------------------------------------------
+TINY_MODEL_VERSION = "tiny-v1"
+_SIX = PPQ // 4                                   # one 16th in ticks
+ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII"]
+
+
+def _melody_tokens(notes: List[Note], root_pc: int, scale: str) -> List[str]:
+    """Notes -> tokens 'i<interval>:<16ths>' (interval in scale steps) and rests 'r<16ths>'."""
+    toks, prev, cur = [], None, 0
+    for n in sorted(notes, key=lambda n: (n.start, -n.pitch)):
+        if n.start < cur:                         # chords/overlaps: keep the top line only
+            continue
+        gap = (n.start - cur) // _SIX
+        if gap > 0 and prev is not None:
+            toks.append(f"r{min(gap, 16)}")
+        deg, _ = to_degree(n.pitch, root_pc, scale)
+        iv = 0 if prev is None else max(-7, min(7, deg - prev))
+        toks.append(f"i{iv}:{max(1, min(16, round(n.length / _SIX)))}")
+        prev, cur = deg, n.start + n.length
+    return toks
+
+
+def build_corpus(seeds: int = 8) -> Tuple[List[Tuple[List[str], str]], List[List[int]], dict]:
+    """Self-generated training corpus: melodies (tokens) + chord progressions + provenance."""
+    mel, progs = [], []
+    for st in CORE_STYLES:
+        progs += [list(p) for p in STYLES[st]["prog"]]
+        for sd in range(seeds):
+            s = generate_song(st, 8, sd)
+            li = lead_track(s)
+            if li is None:
+                continue
+            for p in s.tracks[li].patterns.values():
+                mel.append((_melody_tokens(p.notes, key_root(s.key), s.scale), st))
+    demo = demo_song()
+    li = lead_track(demo)
+    if li is not None:
+        for p in demo.tracks[li].patterns.values():
+            mel.append((_melody_tokens(p.notes, key_root(demo.key), demo.scale), "demo"))
+    h = hashlib.sha256(json.dumps([mel, progs]).encode()).hexdigest()
+    prov = {"corpus": f"self-generated: generate_song(style, 8 bars, seed) for styles {CORE_STYLES} x seeds 0..{seeds - 1}, "
+                      "lead patterns tokenized; plus the built-in DEMO_SCORE",
+            "license": "MIT (output of this program; no third-party music or samples)", "sequences": len(mel),
+            "progressions": len(progs), "corpus_sha256": h, "deterministic": True, "builder": f"{APP_NAME} {APP_VERSION}"}
+    return mel, progs, prov
+
+
+def _intent_examples() -> List[Tuple[str, str]]:
+    """Synthetic (text, op) pairs for the text->intent classifier."""
+    T = {
+        "compose": ["make a {c} theme", "compose {s} music for the {c}", "write a {b} bar {s} song", "generate a soundtrack for the {c} level",
+                    "create a {m} loop", "i need music for a {c}", "new song please", "make me a tune", "compose a {m} {s} track",
+                    "give me background music for my game", "score my {c} scene", "write a melody"],
+        "variation": ["make a variation", "give me a variation of this", "vary the melody", "another take on this", "mutate it a bit",
+                      "make it different but similar", "variation with seed {n}", "change it up slightly"],
+        "extend": ["extend it by {b} bars", "make it longer", "add another section", "continue the song", "add a bridge",
+                   "lengthen the track", "extend the loop"],
+        "remix": ["remix it as {s}", "turn this into a {c} theme", "make a {s} remix", "rearrange in {s} style", "reimagine it as {c} music",
+                  "remix this song"],
+        "loopify": ["make it loop", "make a seamless loop", "loop it for the web", "loopable version", "make it loop seamlessly",
+                    "fix the loop seam", "gapless loop"],
+        "soundpack": ["make sound effects", "sfx pack", "generate jump and coin sounds", "make a sound pack for my game", "retro sfx for a platformer",
+                      "laser and explosion sounds", "ui sounds", "make sfx"],
+        "stems": ["export stems", "split into tracks", "give me the stems", "separate the parts", "stems for mixing"],
+        "master": ["master it", "make it louder and polished", "normalize the loudness", "master for youtube", "finalize the mix", "master the track"],
+        "describe": ["describe this song", "what is this song", "summarize the track", "tell me about it", "what key is it in", "explain the song"],
+        "critique": ["critique this", "critique", "critique the song", "review my song", "how good is it", "score the melody", "what can be improved", "rate it", "give feedback"],
+        "diff": ["compare these two songs", "what changed between a and b", "diff the versions", "difference between the files"],
+        "suggest": ["what note comes next", "suggest chords", "suggest the next notes", "help me continue the melody", "recommend a chord progression",
+                    "what chord fits", "next note ideas"],
+        "humanize": ["humanize it", "make it feel less robotic", "add groove feel", "loosen the timing", "make it feel human"],
+        "arrange": ["arrange this melody", "add backing tracks", "harmonize my melody", "add bass and drums to my tune", "auto arrange",
+                    "accompany the melody"],
+        "render": ["render to wav", "bounce the audio", "export audio", "make an mp3", "render it"],
+    }
+    fill = {"c": list(GAME_CONTEXTS)[:12], "s": CORE_STYLES, "b": ["4", "8", "16", "32"], "m": ["mellow", "happy", "dark", "tense", "calm"],
+            "n": ["1", "2", "7"]}
+    out = []
+    for op, tpls in T.items():
+        for i, t in enumerate(tpls):
+            for j in range(4):
+                txt = t
+                for k, vals in fill.items():
+                    txt = txt.replace("{" + k + "}", vals[(i * 3 + j * 5) % len(vals)].replace("-", " "))
+                out.append((txt, op))
+    return out
+
+
+_STOP = {"the", "a", "an", "it", "this", "that", "to", "for", "my", "me", "of", "and", "in", "please", "i", "is", "with", "some", "be", "on",
+         "can", "you", "we", "our", "your", "into", "as", "by", "at", "do", "but"}
+
+
+def _feats(text: str) -> List[str]:
+    w = [x for x in re.findall(r"[a-z0-9]+", text.lower()) if x not in _STOP and not x.isdigit()]
+    return w + [a + "_" + b for a, b in zip(w, w[1:])]
+
+
+def train_tiny_model(seeds: int = 8) -> dict:
+    """Train every tiny model (melody Markov, chord transitions, groove grid, intent NB). Deterministic."""
+    from collections import Counter, defaultdict
+    mel, progs, prov = build_corpus(seeds)
+    o0: Counter = Counter()
+    o1: Dict[str, Counter] = defaultdict(Counter)
+    o2: Dict[str, Counter] = defaultdict(Counter)
+    for toks, _ in mel:
+        seq = ["<s>", "<s>"] + toks
+        for i in range(2, len(seq)):
+            o0[seq[i]] += 1
+            o1[seq[i - 1]][seq[i]] += 1
+            o2[seq[i - 2] + " " + seq[i - 1]][seq[i]] += 1
+    trans = [[1] * 7 for _ in range(7)]
+    for p in progs:
+        for a, b in zip(p, p[1:] + p[:1]):
+            trans[a % 7][b % 7] += 3
+    groove: Dict[str, Dict[str, List[float]]] = {}
+    for gname, rows in GROOVES.items():
+        groove[gname] = {inst: [round(0.94 if ch == "x" else (0.06 if inst == "hat" else 0.015), 3) for ch in cells] for inst, cells in rows.items()}
+    ex = _intent_examples()
+    ic: Dict[str, Counter] = defaultdict(Counter)
+    prior: Counter = Counter()
+    for txt, op in ex:
+        prior[op] += 1
+        ic[op].update(_feats(txt))
+    return {"name": TINY_MODEL_VERSION, "format": 1, "provenance": prov,
+            "melody": {"order": 2, "o0": dict(o0), "o1": {k: dict(v) for k, v in sorted(o1.items())},
+                       "o2": {k: dict(v) for k, v in sorted(o2.items())}},
+            "chords": {"transitions": trans},
+            "groove": groove,
+            "intent": {"prior": dict(prior), "counts": {k: dict(v) for k, v in sorted(ic.items())}, "examples": len(ex)}}
+
+
+def models_dir() -> Path:
+    return Path(__file__).resolve().parent / "models"
+
+
+_TINY: Optional["TinyModel"] = None
+
+
+class TinyModel:
+    """Wraps the trained tables with fast lookup helpers."""
+
+    def __init__(self, data: dict):
+        self.data = data
+        m = data["melody"]
+        self.o0, self.o1, self.o2 = m["o0"], m["o1"], m["o2"]
+        self.n0 = sum(self.o0.values())
+        self.vocab = sorted(self.o0)
+        t = np.asarray(data["chords"]["transitions"], dtype=float)
+        self.logT = np.log(t / t.sum(axis=1, keepdims=True))
+        it = data["intent"]
+        self.iprior = it["prior"]
+        self.icounts = it["counts"]
+        self.itotals = {k: sum(v.values()) for k, v in self.icounts.items()}
+        self.ivocab = len({f for v in self.icounts.values() for f in v})
+
+    @property
+    def size_bytes(self) -> int:
+        return len(json.dumps(self.data, separators=(",", ":")))
+
+    def dist(self, h2: str, h1: str) -> Dict[str, float]:
+        """Interpolated order-2/1/0 next-token distribution."""
+        out = {t: 0.1 * c / self.n0 for t, c in self.o0.items()}
+        for lam, table in ((0.3, self.o1.get(h1)), (0.6, self.o2.get(h2 + " " + h1))):
+            if table:
+                tot = sum(table.values())
+                for t, c in table.items():
+                    out[t] = out.get(t, 0.0) + lam * c / tot
+        return out
+
+
+def load_tiny_model(retrain: bool = False) -> TinyModel:
+    """models/tiny-v1.json (shipped) -> ~/.8bms/models cache -> train now (<1 s)."""
+    global _TINY
+    if _TINY is not None and not retrain:
+        return _TINY
+    for p in ([] if retrain else [models_dir() / f"{TINY_MODEL_VERSION}.json", home_dir() / "models" / f"{TINY_MODEL_VERSION}.json"]):
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if d.get("name") == TINY_MODEL_VERSION:
+                _TINY = TinyModel(d)
+                return _TINY
+        except (OSError, ValueError):
+            pass
+    d = train_tiny_model()
+    try:
+        cache = home_dir() / "models"
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / f"{TINY_MODEL_VERSION}.json").write_text(json.dumps(d, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+    except OSError:
+        pass
+    _TINY = TinyModel(d)
+    return _TINY
+
+
+def _chord_set(deg: int, n: int = 7) -> set:
+    return {(deg + k) % n for k in (0, 2, 4)}
+
+
+def tiny_melody(rng: random.Random, root_midi: int, scale: str, prog: List[int], bars: int, tpb: int, density: float = 0.6,
+                lo: int = 0, hi: int = 9, start_deg: Optional[int] = None, temperature: float = 0.9,
+                history: Optional[List[str]] = None) -> List[Note]:
+    """Constrained decoding from the Markov model: in scale, in range, fits the bar,
+    chord tones on strong beats, no long repeats, phrase ends on the tonic."""
+    m = load_tiny_model()
+    nsc = len(SCALES.get(scale, SCALES["major"]))
+    spb = tpb // _SIX
+    total = bars * spb
+    hist = (["<s>", "<s>"] + (history or []))[-2:]
+    deg = start_deg if start_deg is not None else rng.randint(lo + 2, hi - 2)
+    first = start_deg is None
+    pos, notes, reps = 0, [], 0
+    while pos < total:
+        bar, inb = divmod(pos, spb)
+        chord = _chord_set(prog[bar % len(prog)], nsc)
+        strong = inb % max(spb // 2, 1) == 0
+        cands = []
+        for tok, p in sorted(m.dist(hist[-2], hist[-1]).items()):
+            if tok.startswith("r"):
+                d = int(tok[1:])
+                if not notes or d > spb - inb:
+                    continue
+                cands.append((tok, p * (1.25 - density), None, d))
+                continue
+            iv, d = (int(x) for x in tok[1:].split(":"))
+            nd = deg + (0 if first else iv)
+            if d > spb - inb or not (lo <= nd <= hi):
+                continue
+            w = p
+            ct = nd % nsc in chord
+            w *= (3.0 if ct else 0.25) if strong else (1.3 if ct else 1.0)
+            if iv == 0 and reps >= 2:
+                w *= 0.15
+            if pos + d >= total:
+                w *= 8.0 if nd % nsc == 0 else 0.2
+            cands.append((tok, w, nd, d))
+        if not cands:
+            d = spb - inb
+            nd = min((x for x in range(lo, hi + 1) if x % nsc in chord), key=lambda x: abs(x - deg))
+            cands = [(f"i{nd - deg}:{d}", 1.0, nd, d)]
+        ws = np.asarray([c[1] for c in cands], dtype=float) ** (1.0 / max(temperature, 0.05))
+        r = rng.random() * ws.sum()
+        k = int(min(np.searchsorted(np.cumsum(ws), r), len(cands) - 1))
+        tok, _, nd, d = cands[k]
+        if nd is not None:
+            reps = reps + 1 if nd == deg and notes else 0
+            notes.append(Note(pos * _SIX, d * _SIX, scale_note(root_midi, scale, nd), 0.85 if strong else 0.75))
+            deg, first = nd, False
+            tok = f"i{max(-7, min(7, int(tok[1:].split(':')[0])))}:{d}"
+        hist = [hist[-1], tok]
+        pos += d
+    return notes
+
+
+def estimate_chords(weights_per_bar: List[Dict[int, float]], nsc: int = 7) -> List[int]:
+    """Viterbi over diatonic chord degrees. weights_per_bar: [{degree%nsc: weight}]."""
+    if not weights_per_bar:
+        return []
+    m = load_tiny_model()
+    logT = m.logT if nsc == 7 else np.zeros((nsc, nsc))
+    em = np.zeros((len(weights_per_bar), nsc))
+    for b, w in enumerate(weights_per_bar):
+        tot = sum(w.values()) or 1.0
+        for c in range(nsc):
+            cs = _chord_set(c, nsc)
+            em[b, c] = sum(v * (1.0 if d in cs else -0.6) for d, v in w.items()) / tot * 3.0
+    em[0, 0] += 0.6
+    score, back = em[0].copy(), []
+    for b in range(1, len(em)):
+        tot = score[:, None] + logT[:nsc, :nsc]
+        back.append(tot.argmax(axis=0))
+        score = tot.max(axis=0) + em[b]
+    path = [int(score.argmax())]
+    for bk in reversed(back):
+        path.append(int(bk[path[-1]]))
+    return path[::-1]
+
+
+def chord_label(song: Song, deg: int) -> Tuple[str, str]:
+    sc = SCALES.get(song.scale, SCALES["major"])
+    root = key_root(song.key)
+    tri = [sc[(deg + 2 * k) % len(sc)] + 12 * ((deg + 2 * k) // len(sc)) for k in range(3)]
+    third, fifth = (tri[1] - tri[0]) % 12, (tri[2] - tri[0]) % 12
+    q = "dim" if (third, fifth) == (3, 6) else "m" if third == 3 else "aug" if fifth == 8 else ""
+    name = NOTE_NAMES[(root + sc[deg % len(sc)]) % 12] + q
+    rn = ROMAN[deg % 7] if deg % 7 < 7 else str(deg)
+    rn = rn.lower() + ("°" if q == "dim" else "") if q in ("m", "dim") else rn
+    return name, rn
+
+
+def song_chords(song: Song, exclude_lead: bool = False) -> List[int]:
+    """Chord degree per absolute bar estimated from the non-drum notes (bass weighted x2)."""
+    li = lead_track(song) if exclude_lead else None
+    lows = {i: min((n.pitch for p in t.patterns.values() for n in p.notes), default=127) for i, t in enumerate(song.tracks)}
+    bass_i = min((i for i, t in enumerate(song.tracks) if not t.drum), key=lambda i: lows[i], default=None)
+    root, nsc = key_root(song.key), len(SCALES.get(song.scale, SCALES["major"]))
+    out = []
+    for bar in bar_notes(song, lambda i, t: not t.drum and i != li):
+        w: Dict[int, float] = {}
+        for ti, n, at in bar:
+            d, ok = to_degree(n.pitch, root, song.scale)
+            if not ok:
+                continue
+            wt = n.length / PPQ * (2.0 if ti == bass_i else 1.0) * (1.5 if at % song.ticks_per_bar == 0 else 1.0)
+            w[d % nsc] = w.get(d % nsc, 0.0) + wt
+        out.append(w)
+    if not any(out):            # melody only: fall back to the lead itself
+        out = []
+        for bar in bar_notes(song, lambda i, t: not t.drum):
+            w = {}
+            for ti, n, at in bar:
+                d, ok = to_degree(n.pitch, root, song.scale)
+                if ok:
+                    w[d % nsc] = w.get(d % nsc, 0.0) + n.length / PPQ * (1.5 if at % (PPQ * 2) == 0 else 1.0)
+            out.append(w)
+    return estimate_chords(out, nsc)
+
+
+def pattern_chords(song: Song, ti: int, pname: str) -> List[int]:
+    """Chords for each bar of one pattern, judged from the pattern's own notes."""
+    p = song.tracks[ti].patterns[pname]
+    root, nsc = key_root(song.key), len(SCALES.get(song.scale, SCALES["major"]))
+    w: List[Dict[int, float]] = [{} for _ in range(p.bars)]
+    for n in p.notes:
+        b = n.start // song.ticks_per_bar
+        d, ok = to_degree(n.pitch, root, song.scale)
+        if ok and b < p.bars:
+            w[b][d % nsc] = w[b].get(d % nsc, 0.0) + n.length / PPQ * (1.5 if n.start % (PPQ * 2) == 0 else 1.0)
+    return estimate_chords(w, nsc)
+
+
+def groove_drums(groove: str, bars: int, tpb: int, seed: int = 0, energy: Optional[float] = None, fill_last: bool = False) -> List[Note]:
+    """Sample drums from the learned groove grid (probabilities, not fixed patterns)."""
+    m = load_tiny_model()
+    grid = m.data["groove"]
+    if energy is not None:
+        dens = sorted(((sum(sum(v) for v in g.values()), k) for k, g in grid.items() if g), key=lambda x: x[0])
+        groove = dens[min(len(dens) - 1, int(max(0.0, min(1.0, energy)) * (len(dens) - 1) + 0.5))][1]
+    g = grid.get(groove) or grid["four"]
+    rng = random.Random(f"groove:{groove}:{seed}")
+    out = []
+    for b in range(bars):
+        rows = dict(g)
+        if fill_last and b == bars - 1:
+            rows.update({k: [0.95 if c == "x" else 0.02 for c in v] for k, v in FILL.items()})
+        for inst, probs in rows.items():
+            for i, pr in enumerate(probs):
+                if i * _SIX >= tpb:
+                    break
+                if (i == 0 and inst == "kick" and pr > 0.5) or rng.random() < pr:
+                    out.append(Note(b * tpb + i * _SIX, _SIX, 60, 1.0 if (i == 0 and inst == "kick") else (0.8 if i % 4 == 0 else 0.7), inst))
+    return out
+
+
+def humanize_song(song: Song, amount: float = 0.3, seed: int = 0) -> Song:
+    """Deterministic micro-timing and velocity variation; hats push, snares lay back."""
+    s = song.copy()
+    amount = max(0.0, min(1.0, amount))
+    for ti, t in enumerate(s.tracks):
+        for pn, p in sorted(t.patterns.items()):
+            rng = random.Random(f"hum:{seed}:{t.name}:{pn}")
+            for n in sorted(p.notes, key=lambda n: (n.start, n.pitch)):
+                on_beat = n.start % PPQ == 0
+                bias = {"hat": -1, "ohat": -1, "snare": 1, "clap": 1}.get(n.inst or "", 0)
+                shift = 0 if (on_beat and n.start % (PPQ * 2) == 0) else int(round(rng.gauss(bias, 2.0) * amount))
+                shift = max(-int(4 * amount + 0.5), min(int(4 * amount + 0.5), shift))
+                n.start = max(0, n.start + shift)
+                n.velocity = round(max(0.2, min(1.0, n.velocity * (1 + rng.uniform(-0.2, 0.2) * amount) + (0.05 * amount if on_beat else 0))), 3)
+    s.meta["humanize"] = {"amount": amount, "seed": seed}
+    return s
+
+
+def critique_song(song: Song) -> dict:
+    """Rule-based scorer (0-100) used for feedback and as the compose reranker."""
+    li = lead_track(song)
+    root, sc = key_root(song.key), song.scale
+    nsc = len(SCALES.get(sc, SCALES["major"]))
+    metrics: Dict[str, float] = {}
+    tips: List[str] = []
+    allnotes = [n for t in song.tracks if not t.drum for p in t.patterns.values() for n in p.notes]
+    metrics["scale_fit"] = sum(in_scale(n.pitch, root, sc) for n in allnotes) / max(len(allnotes), 1)
+    lead = [(at, n) for bar in bar_notes(song, lambda i, t: i == li) for _, n, at in bar] if li is not None else []
+    lead.sort(key=lambda x: (x[0], -x[1].pitch))
+    bars = song.length_bars()
+    if len(lead) >= 3:
+        pitches = [n.pitch for _, n in lead]
+        ivs = [abs(b - a) for a, b in zip(pitches, pitches[1:])]
+        step = sum(1 for i in ivs if i <= 2) / len(ivs)
+        metrics["stepwise"] = step
+        metrics["big_leaps"] = sum(1 for i in ivs if i > 12) / len(ivs)
+        metrics["range"] = max(pitches) - min(pitches)
+        bars_with = {at // song.ticks_per_bar for at, _ in lead}
+        metrics["density"] = len(lead) / max(len(bars_with), 1)
+        metrics["rhythm_variety"] = len({n.length for _, n in lead})
+        chords = song_chords(song, exclude_lead=True)
+        strong = [(at, n) for at, n in lead if at % (PPQ * 2) == 0]
+        ok = 0
+        for at, n in strong:
+            b = at // song.ticks_per_bar
+            d, _ = to_degree(n.pitch, root, sc)
+            ok += (b < len(chords) and d % nsc in _chord_set(chords[b], nsc))
+        metrics["chord_fit"] = ok / max(len(strong), 1)
+        rh = {}
+        for at, n in lead:
+            rh.setdefault(at // song.ticks_per_bar, []).append(at % song.ticks_per_bar)
+        sigs = [tuple(v) for _, v in sorted(rh.items())]
+        metrics["repetition"] = 1 - len(set(sigs)) / max(len(sigs), 1)
+        last = lead[-1][1]
+        metrics["ending_tonic"] = float(to_degree(last.pitch, root, sc)[0] % nsc in (0, 2, 4))
+        metrics["loop_seam"] = abs(lead[-1][1].pitch - lead[0][1].pitch)
+    else:
+        tips.append("no clear melody: add a lead line (compose, or arrange around a melody)")
+    has_bass = any(not t.drum and min((n.pitch for p in t.patterns.values() for n in p.notes), default=99) < 52 for t in song.tracks)
+    has_drums = any(t.drum and any(p.notes for p in t.patterns.values()) for t in song.tracks)
+    metrics["layers"] = sum(1 for t in song.tracks if any(p.notes for p in t.patterns.values()))
+
+    def peak(v, lo, hi, width):
+        return 1.0 if lo <= v <= hi else max(0.0, 1 - min(abs(v - lo), abs(v - hi)) / width)
+    parts = {"scale_fit": (metrics["scale_fit"], 15)}
+    if "stepwise" in metrics:
+        parts.update({"chord_fit": (metrics["chord_fit"], 20), "stepwise": (peak(metrics["stepwise"], 0.5, 0.85, 0.4), 12),
+                      "leaps": (1 - min(1.0, metrics["big_leaps"] * 5), 6), "range": (peak(metrics["range"], 7, 19, 8), 8),
+                      "density": (peak(metrics["density"], 2.5, 9, 4), 8), "rhythm": (peak(metrics["rhythm_variety"], 2, 5, 2), 6),
+                      "repetition": (peak(metrics["repetition"], 0.25, 0.7, 0.3), 8), "ending": (metrics["ending_tonic"], 5),
+                      "seam": (peak(metrics["loop_seam"], 0, 7, 10), 4)})
+    parts["arrangement"] = ((has_bass + has_drums + min(metrics["layers"], 4) / 4) / 3, 8)
+    total_w = sum(w for _, w in parts.values())
+    score = round(100 * sum(v * w for v, w in parts.values()) / total_w)
+    if metrics["scale_fit"] < 0.9:
+        tips.append(f"{100 - metrics['scale_fit'] * 100:.0f}% of notes are outside {song.key} {sc}: snap to scale")
+    if "chord_fit" in metrics and metrics["chord_fit"] < 0.6:
+        tips.append("strong-beat melody notes often clash with the chords: land on chord tones on beats 1 and 3")
+    if "stepwise" in metrics and metrics["stepwise"] < 0.45:
+        tips.append("melody is very leapy: add stepwise motion between leaps")
+    if "range" in metrics and metrics["range"] > 19:
+        tips.append("melody range is over an octave and a half: tighten it")
+    if "repetition" in metrics and metrics["repetition"] < 0.2:
+        tips.append("little rhythmic repetition: reuse a motif so it is memorable")
+    if "repetition" in metrics and metrics["repetition"] > 0.8:
+        tips.append("very repetitive rhythm: try `variation` for contrast")
+    if not has_bass:
+        tips.append("no bass: try `arrange` to add bass/harmony/drums")
+    if not has_drums:
+        tips.append("no drums: add a groove (`arrange`, or /gen drums)")
+    if "ending_tonic" in metrics and not metrics["ending_tonic"]:
+        tips.append("melody ends off the tonic chord: end on scale degree 1, 3 or 5 to resolve")
+    return {"score": score, "metrics": {k: round(v, 3) for k, v in metrics.items()},
+            "parts": {k: round(v * 100) for k, (v, _) in parts.items()}, "tips": tips or ["sounds solid - try `master` and ship it"]}
+
+
+def suggest_next(song: Song, ti: Optional[int] = None, pname: Optional[str] = None, k: int = 3, at: Optional[int] = None) -> List[dict]:
+    """Top-k next notes for a pattern (note-language tokens with probabilities)."""
+    if not song.tracks:
+        return []
+    ti = lead_track(song) if ti is None else ti
+    ti = 0 if ti is None else ti
+    t = song.tracks[ti]
+    pname = pname or next(iter(t.patterns), "A")
+    p = t.patterns.get(pname) or Pattern(pname, 1)
+    prev = sorted([n for n in p.notes if at is None or n.start < at], key=lambda n: n.start)
+    pos = at if at is not None else max((n.end for n in prev), default=0)
+    if t.drum:
+        m = load_tiny_model()
+        g = m.data["groove"].get("four")
+        step = (pos // _SIX) % 16
+        row = sorted(((g[i][step], i) for i in g), reverse=True)
+        return [{"note": inst, "p": round(pr, 3), "step": step, "ticks": _SIX, "at": pos} for pr, inst in row[:k]]
+    root = key_root(song.key)
+    nsc = len(SCALES.get(song.scale, SCALES["major"]))
+    toks = _melody_tokens(prev, root, song.scale)
+    h = (["<s>", "<s>"] + toks)[-2:]
+    last = prev[-1].pitch if prev else 60 + root + 12
+    deg, _ = to_degree(last, root, song.scale)
+    tpb = song.ticks_per_bar
+    inb = (pos % tpb) // _SIX
+    left = tpb // _SIX - inb
+    chords = pattern_chords(song, ti, pname) if prev else [0]
+    chord = _chord_set(chords[min(pos // tpb, len(chords) - 1)] if chords else 0, nsc)
+    strong = inb % 8 == 0
+    lo = min((n.pitch for n in prev), default=last) - 5
+    hi = max((n.pitch for n in prev), default=last) + 5
+    scores: Dict[Tuple[int, int], float] = {}
+    for tok, pr in load_tiny_model().dist(h[0], h[1]).items():
+        if tok.startswith("r") or tok.startswith("<"):
+            continue
+        iv, d = (int(x) for x in tok[1:].split(":"))
+        d = min(d, left) if left > 0 else d
+        nd = deg + (iv if prev else 0)
+        pitch = scale_note(root, song.scale, nd)
+        if not (lo <= pitch <= hi):
+            continue
+        w = pr * ((2.5 if nd % nsc in chord else 0.4) if strong else (1.2 if nd % nsc in chord else 1.0))
+        scores[(pitch, d)] = scores.get((pitch, d), 0.0) + w
+    tot = sum(scores.values()) or 1.0
+    best = sorted(scores.items(), key=lambda kv: (-kv[1], kv[0]))[:k]
+    return [{"note": note_name(pi).lower() + (_len_suffix(d * _SIX, -1) or f"%{d * _SIX}"), "pitch": note_name(pi), "beats": d / 4,
+             "p": round(w / tot, 3), "midi": pi, "ticks": d * _SIX, "at": pos} for (pi, d), w in best]
+
+
+# --- text -> intent ---------------------------------------------------------
+def parse_intent(text: str) -> dict:
+    """Naive-Bayes op classifier (trained on synthetic phrases) + regex slot filling."""
+    m = load_tiny_model()
+    low = text.lower()
+    feats = _feats(low)
+    known = [f for f in feats if any(f in c for c in m.icounts.values())]
+    args: Dict[str, Any] = {}
+    if (b := re.search(r"(\d+)\s*-?\s*bars?", low)):
+        args["bars"] = int(b.group(1))
+    if (b := re.search(r"(\d{2,3})\s*bpm", low)):
+        args["bpm"] = float(b.group(1))
+    if (b := re.search(r"seed\s*=?\s*(\d+)", low)):
+        args["seed"] = int(b.group(1))
+    if (b := re.search(r"\b(?:in|key of|key)\s+([a-g][#b]?)(?:\s+(major|minor|dorian|phrygian|lydian|mixolydian))?\b", low)):
+        args["key"] = b.group(1).upper()
+    direct = [c for c in sorted(GAME_CONTEXTS, key=len, reverse=True) if re.search(r"\b" + re.escape(c.replace("-", " ")) + r"\b", low.replace("-", " "))]
+    if direct:
+        args["context"] = direct[0]
+    else:
+        for ctx in sorted(CONTEXT_WORDS, key=lambda c: -max(len(w) for w in CONTEXT_WORDS[c])):
+            if any(re.search(r"\b" + re.escape(w) + r"\b", low) for w in CONTEXT_WORDS[ctx]):
+                args["context"] = ctx
+                break
+    for st in sorted(style_names(), key=len, reverse=True):
+        if st.replace("-", " ") in low or st in low:
+            args["style"] = st
+            break
+    if "loop" in low or "seamless" in low:
+        args["loop"] = True
+    sfx = [n for n in SFX if re.search(r"\b" + re.escape(n) + r"\b", low)]
+    sets = [n for n in SFX_SETS if n in low]
+    if sfx or sets:
+        args["names"] = ",".join(sfx + sets)
+    if "tiny" in low or " ml" in low or "model" in low:
+        args["model"] = "tiny"
+    if not known:
+        return {"op": None, "confidence": 0.0, "args": args, "slots": args, "alternatives": []}
+    V = m.ivocab + 1
+    total = sum(m.iprior.values())
+    logp = {}
+    for op, cnt in m.icounts.items():
+        lp = math.log(m.iprior[op] / total)
+        den = m.itotals[op] + V
+        for f in known:
+            lp += math.log((cnt.get(f, 0) + 1) / den)
+        logp[op] = lp
+    mx = max(logp.values())
+    z = sum(math.exp(v - mx) for v in logp.values())
+    ranked = sorted(((math.exp(v - mx) / z, k) for k, v in logp.items()), reverse=True)
+    op = ranked[0][1]
+    remixy = re.search(r"\b(remix|rework|redo|cover|reimagine|re-?style|convert)\b|\bas an?\b", low)
+    if ranked[0][0] < 0.6 and ("context" in args or "style" in args) and not (op == "remix" and remixy):
+        op, ranked[0] = "compose", (max(ranked[0][0], 0.6), "compose")
+    if ("context" in args or "style" in args) and re.search(r"\b(it|this|that|my song)\b", low) and \
+            (remixy or re.search(r"\b(turn|make)\s+(it|this|that)\s+(into|a|an|sound|more)\b", low)) and \
+            (op in ("compose", "remix", "variation", None) or (op == "soundpack" and "names" not in args)):
+        op, ranked[0] = "remix", (max(ranked[0][0], 0.6), "remix")
+    keep = set(OPS[op].params) if op in OPS else set(args)
+    return {"op": op, "confidence": round(ranked[0][0], 3), "args": {k: v for k, v in args.items() if k in keep}, "slots": args,
+            "alternatives": [{"op": k, "p": round(p, 3)} for p, k in ranked[1:3]]}
+
+
+# --- render cache + adaptive buffers ----------------------------------------
+from collections import OrderedDict  # noqa: E402
+
+RENDER_STATS = {"voice_hits": 0, "voice_misses": 0, "song_hits": 0, "song_misses": 0}
+_VOICE_CACHE: "OrderedDict[tuple, np.ndarray]" = OrderedDict()
+_VOICE_BYTES = [0]
+_VOICE_LIMIT = 96 * 1024 * 1024
+_RENDER_CACHE: "OrderedDict[str, Any]" = OrderedDict()
+_VOICE_IKEYS: Dict[int, str] = {}
+
+
+def cache_enabled() -> bool:
+    return os.environ.get("EIGHTBMS_NO_CACHE", "") in ("", "0")
+
+
+def clear_render_cache():
+    _VOICE_CACHE.clear()
+    _RENDER_CACHE.clear()
+    _VOICE_BYTES[0] = 0
+    for k in RENDER_STATS:
+        RENDER_STATS[k] = 0
+
+
+def cached_render_voice(inst, midi, dur, vel, sr=44100, waves=None):
+    """render_voice with an LRU cache: repeated notes (drums, bass, loops) render once."""
+    ik = _VOICE_IKEYS.get(id(inst))
+    if ik is None:
+        ik = _VOICE_IKEYS[id(inst)] = json.dumps(inst, sort_keys=True, default=str)
+    key = (ik, midi, round(dur, 6), round(vel, 4), sr)
+    v = _VOICE_CACHE.get(key)
+    if v is not None:
+        RENDER_STATS["voice_hits"] += 1
+        _VOICE_CACHE.move_to_end(key)
+        return v
+    RENDER_STATS["voice_misses"] += 1
+    v = render_voice(inst, midi, dur, vel, sr, waves)
+    v.setflags(write=False)
+    _VOICE_CACHE[key] = v
+    _VOICE_BYTES[0] += v.nbytes
+    while _VOICE_BYTES[0] > _VOICE_LIMIT and _VOICE_CACHE:
+        _, old = _VOICE_CACHE.popitem(last=False)
+        _VOICE_BYTES[0] -= old.nbytes
+    return v
+
+
+def adaptive_blocksize() -> int:
+    """Pick an audio callback block size from a quick synth benchmark (or $EIGHTBMS_BLOCKSIZE)."""
+    env = os.environ.get("EIGHTBMS_BLOCKSIZE")
+    if env and env.isdigit():
+        return int(env)
+    t0 = time.perf_counter()
+    render_voice(PRESETS["lead"].to_dict(), 69, 0.25, 0.8, SR)
+    ratio = (time.perf_counter() - t0) / 0.25
+    return 256 if ratio < 0.01 else 512 if ratio < 0.03 else 1024 if ratio < 0.1 else 2048
+
+
+# ---------------------------------------------------------------------------
+# Agent framework (3/3): intent ops. One registry -> CLI, Python, HTTP, MCP, ACP,
+# studio slash commands. Song-producing ops return a short "@handle".
+# ---------------------------------------------------------------------------
+SONG_OPS = {"compose", "variation", "extend", "remix", "loopify", "humanize", "arrange"}
+_SRC = {"type": "str", "required": True, "pos": True, "help": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"}
+_OUT = {"type": "path", "default": None, "help": "also save the song (.8bt/.8bms)"}
+_WAV = {"type": "path", "default": None, "help": "also render audio (wav/ogg/mp3/flac)"}
+_SEED = {"type": "int", "default": 0, "help": "seed (same args + seed = same result)"}
+
+
+def _lead_params(song: Song) -> Tuple[int, int, int]:
+    root = key_root(song.key)
+    return 60 + root + (0 if root < 6 else -12) + 12, 0, 9
+
+
+def _apply_tiny_lead(song: Song, rng: random.Random, density: float):
+    li = lead_track(song)
+    if li is None:
+        return
+    lead_root, lo, hi = _lead_params(song)
+    for pn, p in sorted(song.tracks[li].patterns.items()):
+        others = [i for i, t in enumerate(song.tracks) if i != li and not t.drum and pn in t.patterns]
+        prog = None
+        for oi in others:
+            prog = pattern_chords(song, oi, pn)
+            if prog:
+                break
+        prog = prog or [0] * p.bars
+        p.notes = tiny_melody(rng, lead_root, song.scale, prog, p.bars, song.ticks_per_bar, density, lo, hi)
+
+
+@register_op("compose", "Compose a new song from a prompt and/or game context; reranks candidates by critique score.",
+             prompt={"type": "str", "default": "", "pos": True, "join": " ", "help": "free text, e.g. 'tense boss fight 16 bars in E'"},
+             context={"type": "str", "default": None, "help": "game context: " + ", ".join(GAME_CONTEXTS)},
+             style={"type": "str", "default": None, "help": "style (overrides context)"},
+             bars={"type": "int", "default": None, "help": "length in bars"},
+             key={"type": "str", "default": None, "help": "key like C, F#, Bb"},
+             bpm={"type": "float", "default": None, "help": "tempo"},
+             seed=_SEED,
+             model={"type": "str", "default": "tiny", "help": "tiny (Markov+rules, default) | rules | <ml plugin>"},
+             candidates={"type": "int", "default": 4, "help": "generate N and keep the best by critique score"},
+             loop={"type": "bool", "default": None, "help": "make it a seamless loop (default: from context)"},
+             out=_OUT, wav=_WAV)
+def op_compose(prompt="", context=None, style=None, bars=None, key=None, bpm=None, seed=0, model="tiny", candidates=4, loop=None, out=None, wav=None):
+    it = parse_intent(prompt)["slots"] if prompt else {}
+    ctx = resolve_context(context or it.get("context"))
+    c = GAME_CONTEXTS.get(ctx or "", {})
+    style = style or it.get("style") or c.get("style") or "mellow-space"
+    if style not in style_names():
+        raise ValueError(f"unknown style {style!r}; try: {', '.join(style_names())}")
+    bars = int(bars or it.get("bars") or c.get("bars") or 16)
+    bpm = bpm or it.get("bpm") or c.get("bpm")
+    key = key or it.get("key")
+    loop = c.get("loop", False) if loop is None else loop
+    loop = loop or bool(it.get("loop"))
+    seed = int(it.get("seed", seed) if seed == 0 else seed)
+    if model in ML_BACKENDS:
+        song = ML_BACKENDS[model].generate(prompt, new_song(), style=style, bars=bars, seed=seed)
+        if isinstance(song, str):
+            song = parse_score(song)
+        scores = [critique_song(song)["score"]]
+        best = 0
+    else:
+        cands = []
+        for i in range(max(1, int(candidates))):
+            s = generate_song(style, bars, seed * 101 + i, key, bpm)
+            if model == "tiny" and style in STYLES:
+                _apply_tiny_lead(s, random.Random(f"compose:{seed}:{i}"), STYLES[style]["density"])
+            cands.append((critique_song(s)["score"], -i, s))
+        scores = [x[0] for x in cands]
+        sc, negi, song = max(cands, key=lambda x: (x[0], x[1]))
+        best = -negi
+    name = (ctx or style).replace("-", " ").title()
+    song.title = f"{name} #{seed}"
+    song.meta["generator"] = {"op": "compose", "model": model, "style": style, "context": ctx, "bars": bars, "seed": seed,
+                              "prompt": prompt, "candidate": best, "scores": scores}
+    if loop:
+        song.loop_start, song.loop_end = 0, song.length_bars()
+    return _finish(song, out, wav, seamless=bool(loop), style=style, context=ctx, model=model, score=scores[best], loop=bool(loop))
+
+
+@register_op("variation", "Make a variation: same form and harmony, re-voiced melody/rhythm details.",
+             src=_SRC, amount={"type": "float", "default": 0.3, "help": "0..1 how much to change"}, seed=_SEED, out=_OUT, wav=_WAV)
+def op_variation(src, amount=0.3, seed=0, out=None, wav=None):
+    s = _song(src)
+    rng = random.Random(f"var:{seed}")
+    root = key_root(s.key)
+    nsc = len(SCALES.get(s.scale, SCALES["major"]))
+    chords = song_chords(s, exclude_lead=True)
+    changed = 0
+    for ti, t in enumerate(s.tracks):
+        for pn, p in sorted(t.patterns.items()):
+            first = next((c.bar for c in s.arrangement if c.track == ti and c.pattern == pn), 0)
+            if t.drum:
+                hats = [n for n in p.notes if n.inst in ("hat", "ohat")]
+                for n in hats:
+                    if rng.random() < amount * 0.3:
+                        n.inst = "ohat" if n.inst == "hat" else "hat"
+                        changed += 1
+                continue
+            for n in sorted(p.notes, key=lambda n: (n.start, n.pitch)):
+                if rng.random() >= amount:
+                    continue
+                d, ok = to_degree(n.pitch, root, s.scale)
+                bar = first + n.start // s.ticks_per_bar
+                chord = _chord_set(chords[bar] if bar < len(chords) else 0, nsc)
+                strong = n.start % (PPQ * 2) == 0
+                opts = [d + k for k in (-2, -1, 1, 2) if (not strong or (d + k) % nsc in chord)]
+                if opts and ti == lead_track(s):
+                    n.pitch = scale_note(root, s.scale, rng.choice(opts))
+                    changed += 1
+                elif n.length >= PPQ and rng.random() < 0.5 and ti == lead_track(s):
+                    half = n.length // 2
+                    p.notes.append(Note(n.start + half, n.length - half, scale_note(root, s.scale, d + rng.choice([-1, 1])), n.velocity * 0.9))
+                    n.length = half
+                    changed += 1
+    s.title = f"{s.title} (var {seed})"
+    s.meta["variation"] = {"amount": amount, "seed": seed}
+    return _finish(s, out, wav, changed=changed)
+
+
+@register_op("extend", "Extend a song by N bars: new melody over the existing accompaniment, ending with a fill.",
+             src=_SRC, bars={"type": "int", "default": 8, "help": "bars to add"}, seed=_SEED,
+             model={"type": "str", "default": "tiny", "help": "tiny | rules"}, out=_OUT, wav=_WAV)
+def op_extend(src, bars=8, seed=0, model="tiny", out=None, wav=None):
+    s = _song(src)
+    rng = random.Random(f"ext:{seed}")
+    end, tpb = s.length_bars(), s.ticks_per_bar
+    li = lead_track(s)
+    used: Dict[int, List[str]] = {}
+    for c in sorted(s.arrangement, key=lambda c: c.bar):
+        used.setdefault(c.track, []).append(c.pattern)
+    from collections import Counter
+    added_clips = 0
+    blocks: List[Tuple[int, Dict[int, str]]] = []
+    for ti, t in enumerate(s.tracks):
+        if ti == li or ti not in used:
+            continue
+        pn = Counter(used[ti]).most_common(1)[0][0]
+        blocks.append((ti, {"pat": pn}))
+    unit = max([s.tracks[ti].patterns[d["pat"]].bars for ti, d in blocks] or [min(4, bars)])
+    n_units = max(1, math.ceil(bars / unit))
+    for ti, d in blocks:
+        for u in range(n_units):
+            pn = d["pat"]
+            if s.tracks[ti].drum and u == n_units - 1:
+                fill = "Xf"
+                if fill not in s.tracks[ti].patterns:
+                    groove = STYLES[guess_style(s)]["groove"]
+                    s.tracks[ti].patterns[fill] = Pattern(fill, unit, groove_drums(groove, unit, tpb, seed, fill_last=True))
+                pn = fill
+            s.arrangement.append(Clip(ti, pn, end + u * unit))
+            added_clips += 1
+    if li is not None:
+        lead_root, lo, hi = _lead_params(s)
+        acc = [ti for ti, _ in blocks if not s.tracks[ti].drum]
+        prog = pattern_chords(s, acc[0], dict(blocks)[acc[0]]["pat"]) if acc else [0] * unit
+        lead_ev = [(at, n) for bar in bar_notes(s, lambda i, t: i == li) for _, n, at in bar]
+        last = max(lead_ev, key=lambda x: x[0])[1] if lead_ev else None
+        start_deg = None
+        if last is not None:
+            dd, _ = to_degree(last.pitch, key_root(s.key), s.scale)
+            start_deg = max(lo, min(hi, dd - to_degree(lead_root, key_root(s.key), s.scale)[0]))
+        names = []
+        for k in range(2):
+            pn = f"X{k + 1}"
+            gen = (tiny_melody(rng, lead_root, s.scale, prog, unit, tpb, 0.6, lo, hi, start_deg if k == 0 else None) if model == "tiny"
+                   else gen_melody(rng, lead_root, s.scale, prog, unit, tpb, 0.6, lo, hi))
+            s.tracks[li].patterns[pn] = Pattern(pn, unit, gen)
+            names.append(pn)
+        for u in range(n_units):
+            s.arrangement.append(Clip(li, names[0] if u % 2 == 0 or u == n_units - 1 else names[1], end + u * unit))
+            added_clips += 1
+    s.loop_start, s.loop_end = 0, s.length_bars()
+    s.meta["extend"] = {"bars": n_units * unit, "seed": seed, "model": model}
+    return _finish(s, out, wav, added_bars=n_units * unit)
+
+
+def auto_arrange(song: Song, style: Optional[str] = None, seed: int = 0, keep_tracks: Optional[List[int]] = None) -> Song:
+    """Keep the melody; build harmony, bass and drums from estimated chords in a style."""
+    li = lead_track(song)
+    if li is None:
+        raise ValueError("no melody to arrange: add notes to a track first")
+    style = style or guess_style(song)
+    sp = STYLES[style] if style in STYLES else STYLES["upbeat"]
+    s = Song(title=song.title, bpm=song.bpm, time_sig=song.time_sig, swing=sp["swing"], key=song.key, scale=song.scale, master=song.master)
+    s.instruments = copy.deepcopy(song.instruments)
+    for f in s.effects:
+        if f["type"] in sp["fx"]:
+            f["enabled"] = True
+            f["params"].update(sp["fx"][f["type"]])
+    lt = copy.deepcopy(song.tracks[li])
+    lt.name, lt.kind = "Lead", "pulse1"
+    s.tracks = [lt, Track("Harmony", "pulse2", sp["harm"], 0.55, 0.2), Track("Bass", "triangle", sp["bass"], 0.9, 0.0),
+                Track("Drums", "noise", "snare", 0.75, 0.0, drum=True)]
+    tpb = s.ticks_per_bar
+    root = key_root(s.key)
+    bass_root, harm_root = 36 + root + (12 if root < 5 else 0), 48 + root + (12 if root < 5 else 0)
+    for pn in sorted(lt.patterns):
+        tmp = Song(key=s.key, scale=s.scale, time_sig=s.time_sig, tracks=[lt])
+        prog = pattern_chords(tmp, 0, pn) or [0]
+        pb = lt.patterns[pn].bars
+        if sp["harm"] == "pad":
+            harm = gen_pad(harm_root, s.scale, prog, pb, tpb)
+        elif sp["harm"] == "blip":
+            harm = gen_arp(harm_root, s.scale, prog, pb, tpb, "updown", PPQ // 2)
+        else:
+            harm = [Note(b * tpb + i * PPQ, PPQ, diatonic_chord(harm_root, s.scale, prog[b % len(prog)])[i % 3], 0.6)
+                    for b in range(pb) for i in range(tpb // PPQ)]
+        s.tracks[1].patterns[pn] = Pattern(pn, pb, harm)
+        s.tracks[2].patterns[pn] = Pattern(pn, pb, gen_bass(bass_root, s.scale, prog, pb, tpb, sp["bass_style"]))
+        s.tracks[3].patterns[pn] = Pattern(pn, pb, groove_drums(sp["groove"], pb, tpb, seed))
+    for c in song.arrangement:
+        if c.track == li:
+            for ti in range(4):
+                s.arrangement.append(Clip(ti, c.pattern, c.bar))
+    s.loop_start, s.loop_end = song.loop_start, song.loop_end
+    s.meta = dict(song.meta, arrange={"style": style, "seed": seed})
+    return s
+
+
+def guess_style(song: Song) -> str:
+    best, bs = "upbeat", 1e9
+    for name in CORE_STYLES:
+        sp = STYLES[name]
+        d = abs(song.bpm - sum(sp["bpm"]) / 2) / 10 + (0 if sp["scale"] == song.scale else 3)
+        if d < bs:
+            best, bs = name, d
+    return best
+
+
+@register_op("arrange", "Auto-arrange: keep the melody, add chords (Viterbi), bass and a groove in a style.",
+             src=_SRC, style={"type": "str", "default": None, "help": "style (default: guessed from tempo/scale)"}, seed=_SEED, out=_OUT, wav=_WAV)
+def op_arrange(src, style=None, seed=0, out=None, wav=None):
+    s = auto_arrange(_song(src), style, seed)
+    return _finish(s, out, wav, style=s.meta["arrange"]["style"])
+
+
+@register_op("remix", "Remix in another style or context: keeps the melody, new tempo/instruments/harmony/groove.",
+             src=_SRC, style={"type": "str", "default": None, "help": "target style"},
+             context={"type": "str", "default": None, "help": "or a game context"}, bpm={"type": "float", "default": None, "help": "tempo"},
+             seed=_SEED, out=_OUT, wav=_WAV)
+def op_remix(src, style=None, context=None, bpm=None, seed=0, out=None, wav=None):
+    s = _song(src)
+    ctx = resolve_context(context)
+    c = GAME_CONTEXTS.get(ctx or "", {})
+    style = style or c.get("style") or "chase"
+    if style not in STYLES:
+        raise ValueError(f"remix needs a core style; have {', '.join(sorted(STYLES))}")
+    r = auto_arrange(s, style, seed)
+    sp = STYLES[style]
+    r.bpm = float(bpm or c.get("bpm") or random.Random(f"remix:{seed}").randint(*sp["bpm"]))
+    r.tracks[0].instrument = sp["lead"]
+    r.title = f"{s.title} ({style} remix)"
+    return _finish(r, out, wav, style=style)
+
+
+@register_op("loopify", "Make a seamless loop: set the loop region, smooth the seam, optionally render a gapless file.",
+             src=_SRC, bars={"type": "int", "default": None, "help": "loop length (default: whole song)"}, out=_OUT,
+             wav={"type": "path", "default": None, "help": "render the gapless loop (wav/ogg)"})
+def op_loopify(src, bars=None, out=None, wav=None):
+    s = _song(src)
+    L = s.length_bars()
+    L2 = max(1, min(int(bars), L)) if bars else L
+    s.loop_start, s.loop_end = 0, L2
+    li = lead_track(s)
+    seam = None
+    if li is not None:
+        notes = [(at, n) for bar in bar_notes(s, lambda i, t: i == li)[:L2] for _, n, at in bar]
+        if notes:
+            notes.sort(key=lambda x: x[0])
+            first, (at, last) = notes[0][1], notes[-1]
+            before = abs(last.pitch - first.pitch)
+            if before > 7:
+                root, nsc = key_root(s.key), len(SCALES.get(s.scale, SCALES["major"]))
+                ch = _chord_set((song_chords(s, True) or [0])[0], nsc)
+                d0, _ = to_degree(first.pitch, root, s.scale)
+                cands = [d for d in range(d0 - 7, d0 + 8) if d % nsc in ch and abs(scale_note(root, s.scale, d) - first.pitch) <= 7]
+                if cands:
+                    dl, _ = to_degree(last.pitch, root, s.scale)
+                    last.pitch = scale_note(root, s.scale, min(cands, key=lambda d: abs(d - dl)))
+            seam = {"jump_before": before, "jump_after": abs(last.pitch - first.pitch)}
+    secs = L2 * s.ticks_per_bar * s.tick_seconds()
+    res = _finish(s, out, wav, seamless=True, loop_bars=L2, loop_seconds=round(secs, 3), loop_samples=int(round(secs * SR)))
+    if seam:
+        res["seam"] = seam
+    return res
+
+
+@register_op("soundpack", "Render a retro SFX pack (WAV files + manifest.json + Howler-style sprite).",
+             names={"type": "str", "default": "all", "pos": True, "join": ",", "help": "comma list of sfx and/or sets (" + ", ".join(SFX_SETS) + ") or 'all'"},
+             out={"type": "path", "default": "sfx", "help": "output folder"},
+             variants={"type": "int", "default": 1, "help": "variants per sound (deterministic)"}, seed=_SEED,
+             sprite={"type": "bool", "default": True, "help": "also write sprite.wav + sprite.json"},
+             sr={"type": "int", "default": 44100, "help": "sample rate"})
+def op_soundpack(names="all", out="sfx", variants=1, seed=0, sprite=True, sr=44100):
+    want: List[str] = []
+    for n in [x.strip() for x in str(names or "all").split(",") if x.strip()]:
+        want += list(SFX) if n == "all" else SFX_SETS.get(n, [n])
+    want = list(dict.fromkeys(want))
+    d = Path(out)
+    d.mkdir(parents=True, exist_ok=True)
+    manifest: Dict[str, Any] = {"generator": f"{APP_NAME} {APP_VERSION} soundpack", "seed": seed, "sr": sr, "license": "CC0 / MIT", "sounds": {}}
+    sprite_parts, spr, t_ms = [], {}, 0
+    gap = np.zeros(int(0.05 * sr))
+    for n in want:
+        for v in range(max(1, int(variants))):
+            buf = render_sfx(n, (seed * 1000 + v) if (seed or v) else None, sr)
+            fn = f"{n}.wav" if variants == 1 else f"{n}-{v + 1}.wav"
+            write_wav(d / fn, buf, sr)
+            key = fn[:-4]
+            ms = round(len(buf) / sr * 1000)
+            manifest["sounds"][key] = {"file": fn, "ms": ms, "desc": SFX[n][2]}
+            if sprite:
+                spr[key] = [t_ms, ms]
+                sprite_parts += [buf, gap]
+                t_ms += ms + 50
+    (d / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    res = {"dir": str(d.resolve()), "count": len(manifest["sounds"]), "manifest": str((d / "manifest.json").resolve())}
+    if sprite and sprite_parts:
+        write_wav(d / "sprite.wav", np.concatenate(sprite_parts), sr)
+        (d / "sprite.json").write_text(json.dumps({"src": ["sprite.wav"], "sprite": spr}, indent=1), encoding="utf-8")
+        res["sprite"] = str((d / "sprite.wav").resolve())
+    return res
+
+
+@register_op("stems", "Render one WAV per track (plus mix.wav) into a folder.",
+             src=_SRC, out={"type": "path", "default": "stems", "help": "folder"},
+             seamless={"type": "bool", "default": False, "help": "loop region, tails folded (gapless)"})
+def op_stems(src, out="stems", seamless=False):
+    s = _song(src)
+    d = Path(out)
+    r = op_render(s, str(d / "mix.wav"), stems=str(d), seamless=seamless)
+    return {"dir": str(d.resolve()), "stems": r["stems"], "mix": r["path"], "seconds": r["seconds"]}
+
+
+def loudness(x: np.ndarray) -> Tuple[float, float]:
+    """(RMS dBFS, peak dBFS) - a simple stand-in for LUFS, good enough for chiptune."""
+    rms = float(np.sqrt(np.mean(np.square(x)))) if x.size else 0.0
+    pk = float(np.max(np.abs(x))) if x.size else 0.0
+    return (20 * math.log10(rms) if rms > 0 else -120.0), (20 * math.log10(pk) if pk > 0 else -120.0)
+
+
+@register_op("master", "Master to a loudness target: gain to RMS target, soft limiter, fades; renders a file.",
+             src=dict(_SRC, help="song (file/@handle/demo) or an existing .wav"), out={"type": "path", "default": "master.wav", "help": "output file"},
+             target_db={"type": "float", "default": -14.0, "help": "target RMS dBFS (~LUFS for chiptune)"},
+             ceiling_db={"type": "float", "default": -1.0, "help": "peak ceiling dBFS"},
+             fade_in={"type": "float", "default": 0.0, "help": "seconds"}, fade_out={"type": "float", "default": 0.0, "help": "seconds"},
+             loop={"type": "bool", "default": False, "help": "seamless loop render (no fades)"})
+def op_master(src, out="master.wav", target_db=-14.0, ceiling_db=-1.0, fade_in=0.0, fade_out=0.0, loop=False):
+    if isinstance(src, (str, Path)) and str(src).lower().endswith(".wav") and Path(src).exists():
+        x, sr = read_wav(src)                    # master an existing render
+        x = np.asarray(x, dtype=np.float64)
+        if x.ndim == 1:
+            x = np.stack([x, x], axis=1)
+        if sr != SR:
+            idx = np.linspace(0, len(x) - 1, int(len(x) * SR / sr))
+            x = np.stack([np.interp(idx, np.arange(len(x)), x[:, c]) for c in range(2)], axis=1)
+    else:
+        s = _song(src)
+        a, b = s.loop_range() if loop else (0, s.length_bars())
+        x = render_song(s, a, b, seamless=loop, tail=0 if loop else 1.5)
+    rb, pb = loudness(x)
+    gain = 10 ** ((target_db - rb) / 20) if rb > -120 else 1.0
+    y = x * gain
+    c = 10 ** (ceiling_db / 20)
+    knee = c * 0.7
+    ay = np.abs(y)
+    over = ay > knee
+    y[over] = np.sign(y[over]) * (knee + (c - knee) * np.tanh((ay[over] - knee) / (c - knee)))
+    if not loop:
+        for secs, rev in ((fade_in, False), (fade_out, True)):
+            n = min(int(secs * SR), len(y))
+            if n > 0:
+                ramp = np.linspace(0, 1, n)[:, None]
+                if rev:
+                    y[-n:] *= ramp[::-1]
+                else:
+                    y[:n] *= ramp
+    ra, pa = loudness(y)
+    p = export_audio(out, y)
+    return {"path": str(Path(p).resolve()), "seconds": round(len(y) / SR, 2), "rms_db_before": round(rb, 1), "peak_db_before": round(pb, 1),
+            "rms_db": round(ra, 1), "peak_db": round(pa, 1), "gain_db": round(20 * math.log10(gain), 1)}
+
+
+def _mood(song: Song) -> str:
+    minorish = song.scale in ("minor", "harmonic_minor", "phrygian", "dorian", "minor_pentatonic", "blues")
+    fast = song.bpm >= 130
+    slow = song.bpm < 95
+    return ("dark and driving" if fast else "brooding" if slow else "tense") if minorish else ("bright and energetic" if fast else "calm and mellow" if slow else "cheerful")
+
+
+@register_op("describe", "Describe a song in one paragraph plus key facts (form, chords, range, mood, score).", src=_SRC)
+def op_describe(src):
+    s = _song(src)
+    secs = s.length_bars() * s.ticks_per_bar * s.tick_seconds()
+    li = lead_track(s)
+    form = []
+    if li is not None:
+        lead_clips = sorted((c for c in s.arrangement if c.track == li), key=lambda c: c.bar)
+        form = [c.pattern for c in lead_clips]
+    chords = song_chords(s, exclude_lead=True)
+    labels = [chord_label(s, d) for d in chords[:8]]
+    lead_notes = [n for p in (s.tracks[li].patterns.values() if li is not None else []) for n in p.notes]
+    rng_txt = f"{note_name(min(n.pitch for n in lead_notes))}-{note_name(max(n.pitch for n in lead_notes))}" if lead_notes else "-"
+    crit = critique_song(s)
+    tracks = [f"{t.name}({t.instrument})" for t in s.tracks]
+    text = (f"'{s.title}': {s.length_bars()}-bar {s.key} {s.scale} piece at {s.bpm:g} BPM ({secs:.1f}s), {_mood(s)}. "
+            f"Tracks: {', '.join(tracks)}. Form: {' '.join(form) or '-'}. Chords: {' '.join(r for _, r in labels) or '-'} "
+            f"({' '.join(n for n, _ in labels)}). Lead range {rng_txt}. Critique {crit['score']}/100.")
+    return {"summary": text, "title": s.title, "bars": s.length_bars(), "seconds": round(secs, 2), "bpm": s.bpm, "key": f"{s.key} {s.scale}",
+            "mood": _mood(s), "form": " ".join(form), "chords": " ".join(r for _, r in labels), "lead_range": rng_txt,
+            "tracks": tracks, "score": crit["score"]}
+
+
+@register_op("critique", "Score a song 0-100 with metrics and concrete tips (also used to rerank compose).", src=_SRC)
+def op_critique(src):
+    return critique_song(_song(src))
+
+
+@register_op("diff", "Structural diff of two songs: settings, tracks, notes added/removed, arrangement.",
+             a={"type": "str", "required": True, "pos": True, "help": "first song"}, b={"type": "str", "required": True, "pos": True, "help": "second song"})
+def op_diff(a, b):
+    x, y = _song(a), _song(b)
+    ch: List[str] = []
+    for f in ("title", "bpm", "key", "scale", "swing", "master", "time_sig", "loop_start", "loop_end"):
+        va, vb = getattr(x, f), getattr(y, f)
+        if va != vb:
+            ch.append(f"{f}: {va} -> {vb}")
+    xa, ya = {t.name: t for t in x.tracks}, {t.name: t for t in y.tracks}
+    added = removed = 0
+    for n in sorted(set(xa) | set(ya)):
+        if n not in xa:
+            ch.append(f"+track {n}")
+            added += sum(len(p.notes) for p in ya[n].patterns.values())
+            continue
+        if n not in ya:
+            ch.append(f"-track {n}")
+            removed += sum(len(p.notes) for p in xa[n].patterns.values())
+            continue
+        ta, tb = xa[n], ya[n]
+        if ta.instrument != tb.instrument:
+            ch.append(f"{n}: inst {ta.instrument} -> {tb.instrument}")
+        for pn in sorted(set(ta.patterns) | set(tb.patterns)):
+            na = {(m.start, m.length, m.pitch, m.inst) for m in (ta.patterns[pn].notes if pn in ta.patterns else [])}
+            nb = {(m.start, m.length, m.pitch, m.inst) for m in (tb.patterns[pn].notes if pn in tb.patterns else [])}
+            if na != nb:
+                ch.append(f"{n}.{pn}: +{len(nb - na)} -{len(na - nb)} notes")
+                added += len(nb - na)
+                removed += len(na - nb)
+    arr_a = sorted((c.track, c.pattern, c.bar) for c in x.arrangement)
+    arr_b = sorted((c.track, c.pattern, c.bar) for c in y.arrangement)
+    if arr_a != arr_b:
+        ch.append(f"arrangement: {x.length_bars()} -> {y.length_bars()} bars, {len(set(arr_b) - set(arr_a))} clips added, "
+                  f"{len(set(arr_a) - set(arr_b))} removed")
+    return {"same": not ch, "notes_added": added, "notes_removed": removed, "changes": ch}
+
+
+@register_op("suggest", "ML suggestions: next notes for a pattern, chords per bar, or a groove.",
+             src=_SRC, kind={"type": "str", "default": "next", "help": "next | chords | groove"},
+             track={"type": "str", "default": None, "help": "track name or index (default: lead)"},
+             pattern={"type": "str", "default": None, "help": "pattern name"}, k={"type": "int", "default": 3, "help": "how many"},
+             seed=_SEED)
+def op_suggest(src, kind="next", track=None, pattern=None, k=3, seed=0):
+    s = _song(src)
+    ti = None
+    if track is not None:
+        ti = int(track) if str(track).isdigit() else s.track_index(str(track))
+    if kind == "chords":
+        if ti is None:
+            degs = song_chords(s, exclude_lead=True)
+            lab = [chord_label(s, d) for d in degs]
+            return {"chords": " ".join(n for n, _ in lab), "roman": " ".join(r for _, r in lab), "per": "bar"}
+        pn = pattern or next(iter(s.tracks[ti].patterns), "A")
+        lab = [chord_label(s, d) for d in pattern_chords(s, ti, pn)]
+        return {"chords": " ".join(n for n, _ in lab), "roman": " ".join(r for _, r in lab), "per": f"bar of {s.tracks[ti].name}.{pn}"}
+    if kind == "groove":
+        st = guess_style(s)
+        notes = groove_drums(STYLES[st]["groove"], 1, s.ticks_per_bar, seed)
+        rows: Dict[str, List[str]] = {}
+        for n in notes:
+            rows.setdefault(n.inst or "?", ["."] * (s.ticks_per_bar // _SIX))[n.start // _SIX] = "x"
+        return {"style": st, "groove": {k2: "".join(v) for k2, v in rows.items()},
+                "score": "pat Drums.G: " + notes_to_text(notes)}
+    sug = suggest_next(s, ti, pattern, k)
+    return {"next": " | ".join(x["note"] for x in sug), "options": sug}
+
+
+@register_op("humanize", "Humanize timing and velocity (deterministic per seed).",
+             src=_SRC, amount={"type": "float", "default": 0.3, "help": "0..1"}, seed=_SEED, out=_OUT, wav=_WAV)
+def op_humanize(src, amount=0.3, seed=0, out=None, wav=None):
+    return _finish(humanize_song(_song(src), amount, seed), out, wav, amount=amount)
+
+
+@register_op("intent", "Parse plain English into an op call {op, args, confidence} (no side effects).",
+             text={"type": "str", "required": True, "pos": True, "join": " ", "help": "request in plain English"})
+def op_intent(text):
+    return parse_intent(text)
+
+
+@register_op("library", "List the style/preset library: styles, game contexts, grooves, presets, SFX and SFX sets.",
+             what={"type": "str", "default": "all", "pos": True, "help": "all | styles | contexts | grooves | presets | sfx"})
+def op_library(what="all"):
+    lib = {"styles": {k: f"{v['scale']} {v['bpm'][0]}-{v['bpm'][1]}bpm lead={v['lead']} groove={v['groove']}" for k, v in sorted(STYLES.items())},
+           "contexts": {k: f"{v['style']} {v['bars']} bars{' loop' if v['loop'] else ' jingle'} - {v['desc']}" for k, v in GAME_CONTEXTS.items()},
+           "grooves": {k: " ".join(f"{i}:{c}" for i, c in v.items()) for k, v in GROOVES.items()},
+           "presets": sorted(PRESETS), "sfx": {k: v[2] for k, v in SFX.items()}, "sfx_sets": {k: ",".join(v) for k, v in SFX_SETS.items()}}
+    for k in STYLE_FUNCS:
+        lib["styles"].setdefault(k, "plugin style")
+    return lib if what == "all" else {what: lib[what]}
+
+
+@register_op("ml", "Tiny ML model: info | train | bench (sizes, provenance, latency).",
+             action={"type": "str", "default": "info", "pos": True, "help": "info | train | bench"},
+             out={"type": "path", "default": None, "help": "train: where to write the model JSON"})
+def op_ml(action="info", out=None):
+    if action == "train":
+        t0 = time.perf_counter()
+        d = train_tiny_model()
+        dt = time.perf_counter() - t0
+        p = Path(out) if out else home_dir() / "models" / f"{TINY_MODEL_VERSION}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(d, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+        global _TINY
+        _TINY = TinyModel(d)
+        return {"path": str(p.resolve()), "bytes": p.stat().st_size, "train_ms": round(dt * 1000), "provenance": d["provenance"]}
+    m = load_tiny_model()
+    if action == "bench":
+        return ml_bench()
+    return {"name": m.data["name"], "bytes": m.size_bytes, "melody_contexts": len(m.o2), "vocab": len(m.vocab),
+            "intent_examples": m.data["intent"]["examples"], "provenance": m.data["provenance"]}
+
+
+def ml_bench() -> dict:
+    """Latency of each ML piece in ms (median of a few runs)."""
+    def t(fn, n=5):
+        xs = []
+        for _ in range(n):
+            t0 = time.perf_counter()
+            fn()
+            xs.append((time.perf_counter() - t0) * 1000)
+        return round(sorted(xs)[len(xs) // 2], 2)
+    s = generate_song("upbeat", 16, 1)
+    res = {"train_ms": t(train_tiny_model, 1), "compose16_ms": t(lambda: op_compose(style="boss", bars=16, seed=1), 3),
+           "melody8_ms": t(lambda: tiny_melody(random.Random(1), 72, "major", [0, 5, 3, 4], 8, PPQ * 4)),
+           "suggest_ms": t(lambda: suggest_next(s, 0, "A")), "chords_ms": t(lambda: song_chords(s)),
+           "critique_ms": t(lambda: critique_song(s)), "intent_ms": t(lambda: parse_intent("make a tense boss theme 16 bars")),
+           "humanize_ms": t(lambda: humanize_song(s)), "groove_ms": t(lambda: groove_drums("rock", 4, PPQ * 4, 1))}
+    clear_render_cache()
+    res["render_cold_ms"] = t(lambda: render_song(s), 1)
+    _RENDER_CACHE.clear()
+    res["render_voicecache_ms"] = t(lambda: (_RENDER_CACHE.clear(), render_song(s)), 3)
+    res["render_songcache_ms"] = t(lambda: render_song(s), 3)
+    res["blocksize"] = adaptive_blocksize()
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -2541,7 +4154,7 @@ def _load_toml(path: Path) -> dict:
         try:
             import tomli as tomllib  # type: ignore
         except ImportError:
-            return _mini_toml(path.read_text())
+            return _mini_toml(path.read_text(encoding="utf-8"))
     with open(path, "rb") as f:
         return tomllib.load(f)
 
@@ -2777,14 +4390,14 @@ class PluginManager:
 
     def disabled(self) -> List[str]:
         try:
-            return json.loads(self.state_file().read_text()).get("disabled", [])
+            return json.loads(self.state_file().read_text(encoding="utf-8")).get("disabled", [])
         except Exception:
             return []
 
     def set_enabled(self, name: str, on: bool):
         d = set(self.disabled())
         (d.discard if on else d.add)(name)
-        self.state_file().write_text(json.dumps({"disabled": sorted(d)}, indent=1))
+        self.state_file().write_text(json.dumps({"disabled": sorted(d)}, indent=1), encoding="utf-8")
         if name in self.plugins:
             self.plugins[name].enabled = on
             if not on:
@@ -3203,7 +4816,7 @@ def scaffold_plugin(ptype: str, name: str, dest: Optional[Path] = None) -> Path:
     for rel, body in _TPL_FILES.items():
         p = root / _T(rel).safe_substitute(subs)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(_T(body).substitute(subs))
+        p.write_text(_T(body).substitute(subs), encoding="utf-8")
     return root
 
 
@@ -3253,7 +4866,7 @@ def test_plugin(path, timeout: int = 600, extra: Optional[List[str]] = None) -> 
     (unless the manifest grants it) and a timeout."""
     root, m = _plugin_root(path)
     with tempfile.TemporaryDirectory(prefix="8bms-sandbox-") as td:
-        (Path(td) / "sitecustomize.py").write_text(_SANDBOX_SITE)
+        (Path(td) / "sitecustomize.py").write_text(_SANDBOX_SITE, encoding="utf-8")
         env = dict(os.environ)
         repo = str(Path(__file__).resolve().parent)
         env["PYTHONPATH"] = os.pathsep.join([td, repo, env.get("PYTHONPATH", "")])
@@ -3423,16 +5036,26 @@ class AudioOut:
         self.playing = False
         self._t_start = 0.0
         self._start_offset = 0
+        self._ws = None
+        self._tmpfiles: List[str] = []
+        self.blocksize = 512
+        self.underflows = 0
         try:
             import sounddevice as sd  # type: ignore
             sd.query_devices(kind="output")
             self._sd, self.backend = sd, "sounddevice"
+            self.blocksize = adaptive_blocksize()
         except Exception:
             try:
                 import simpleaudio as sa  # type: ignore
                 self._sa, self.backend = sa, "simpleaudio"
             except Exception:
-                for player in (["paplay"], ["aplay", "-q"], ["afplay"], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"]):
+                try:
+                    import winsound  # type: ignore  # Windows built-in, no install needed
+                    self._ws, self.backend = winsound, "winsound"
+                except ImportError:
+                    pass
+                for player in (() if self._ws else (["paplay"], ["aplay", "-q"], ["afplay"], ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"])):
                     if shutil.which(player[0]):
                         self._player, self.backend = player, f"os:{player[0]}"
                         break
@@ -3441,6 +5064,8 @@ class AudioOut:
     def _ensure_stream(self):
         if self._stream is None and self._sd is not None:
             def cb(outdata, frames, t, status):
+                if status and getattr(status, "output_underflow", False):
+                    self.underflows += 1
                 out = np.zeros((frames, 2), dtype=np.float32)
                 with self._lock:
                     if self.playing and self._buf is not None:
@@ -3467,7 +5092,7 @@ class AudioOut:
                             keep.append(s)
                     self._oneshots = keep
                 outdata[:] = np.clip(out * self.volume, -1, 1)
-            self._stream = self._sd.OutputStream(samplerate=SR, channels=2, dtype="float32", callback=cb, blocksize=512)
+            self._stream = self._sd.OutputStream(samplerate=SR, channels=2, dtype="float32", callback=cb, blocksize=self.blocksize)
             self._stream.start()
 
     def position_samples(self) -> int:
@@ -3491,7 +5116,19 @@ class AudioOut:
             self.playing = True
         self._t_start, self._start_offset = time.monotonic(), offset
         if self._sd is not None:
+            if self.underflows > 3 and self.blocksize < 4096 and self._stream is not None:
+                # adaptive buffer: the device glitched, so grow the block and reopen the stream
+                self.blocksize *= 2
+                self.underflows = 0
+                try:
+                    self._stream.stop()
+                    self._stream.close()
+                except Exception:
+                    pass
+                self._stream = None
             self._ensure_stream()
+        elif self._ws is not None:
+            self._ws.PlaySound(self._tmp_wav(buf[offset:] * self.volume), self._ws.SND_FILENAME | self._ws.SND_ASYNC | (self._ws.SND_LOOP if loop else 0))
         elif self._sa is not None:
             self._sa_play = self._sa.play_buffer(to_int16(buf[offset:] * self.volume).tobytes(), 2, 2, SR)
         elif self.backend.startswith("os:"):
@@ -3500,9 +5137,21 @@ class AudioOut:
             write_wav(tmp, buf[offset:] * self.volume)
             self._proc = subprocess.Popen(self._player + [tmp], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def _tmp_wav(self, buf: np.ndarray) -> str:
+        fd, tmp = tempfile.mkstemp(suffix=".wav", prefix="8bms-")
+        os.close(fd)
+        write_wav(tmp, buf)
+        self._tmpfiles.append(tmp)
+        return tmp
+
     def stop(self):
         with self._lock:
             self.playing = False
+        if self._ws is not None:
+            try:
+                self._ws.PlaySound(None, 0)
+            except Exception:
+                pass
         if self._sa_play is not None:
             try:
                 self._sa_play.stop()
@@ -3518,7 +5167,7 @@ class AudioOut:
 
     def needs_restart(self) -> bool:
         """For non-streaming backends: True when a loop iteration ended."""
-        if self._sd is not None or not self.playing or not self._loop or self._buf is None:
+        if self._sd is not None or self._ws is not None or not self.playing or not self._loop or self._buf is None:
             return False
         return (time.monotonic() - self._t_start) * SR + self._start_offset >= len(self._buf)
 
@@ -3532,6 +5181,9 @@ class AudioOut:
                 self._sa.play_buffer(to_int16(buf * self.volume).tobytes(), 2, 2, SR)
             except Exception:
                 pass
+        elif self._ws is not None:
+            if not self.playing:        # winsound has one voice: don't cut the song for a preview
+                self._ws.PlaySound(self._tmp_wav(buf * self.volume), self._ws.SND_FILENAME | self._ws.SND_ASYNC)
         elif self.backend.startswith("os:"):
             fd, tmp = tempfile.mkstemp(suffix=".wav")
             os.close(fd)
@@ -3546,6 +5198,12 @@ class AudioOut:
                 self._stream.close()
             except Exception:
                 pass
+        for f in self._tmpfiles:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        self._tmpfiles = []
 
 
 # ---------------------------------------------------------------------------
@@ -3815,7 +5473,7 @@ class ACPServer:
         f = self.session_file(sid or "")
         if not sid or not f.exists():
             raise _RPCError(-32602, f"unknown session {sid!r}")
-        d = json.loads(f.read_text())
+        d = json.loads(f.read_text(encoding="utf-8"))
         self._make(sid, params.get("cwd") or d.get("cwd"), Song.from_dict(d["song"]), d.get("history", []))
         for h in d.get("history", []):
             kind = "user_message_chunk" if h["role"] == "user" else "agent_message_chunk"
@@ -3823,7 +5481,7 @@ class ACPServer:
 
     def save_session(self, sid: str):
         s = self.sessions[sid]
-        self.session_file(sid).write_text(json.dumps({"song": s["interp"].song.to_dict(), "history": s["history"][-200:], "cwd": s["cwd"]}))
+        self.session_file(sid).write_text(json.dumps({"song": s["interp"].song.to_dict(), "history": s["history"][-200:], "cwd": s["cwd"]}), encoding="utf-8")
 
     def advertise(self, sid: str):
         cmds = [{"name": n, "description": d, **({"input": {"hint": h}} if h else {})} for n, d, h in ACP_COMMANDS]
@@ -3991,6 +5649,10 @@ def make_http_server(host: str = "127.0.0.1", port: int = 8765):
                 return self._send(200, {"ok": True, "version": APP_VERSION})
             if self.path == "/ops":
                 return self._send(200, {n: {"help": o.help, "params": o.json_schema(), "owner": o.owner} for n, o in OPS.items()})
+            if self.path == "/tools":
+                return self._send(200, {"tools": op_tools()})
+            if self.path == "/openapi.json":
+                return self._send(200, openapi_spec())
             self._send(404, {"error": "not found"})
 
         def do_POST(self):
@@ -4009,35 +5671,371 @@ def make_http_server(host: str = "127.0.0.1", port: int = 8765):
 
 
 # ---------------------------------------------------------------------------
-# Terminal studio (`8bms repl`)
+# Terminal studio (`8bms studio`, alias `8bms repl`): slash commands, tab
+# completion with ML next-note suggestions, and live visualizations (tracker
+# playhead, VU meters, oscilloscope, spectrum). Plain ANSI, no curses needed,
+# so it runs in Windows Terminal / PowerShell / cmd, macOS and Linux terminals.
 # ---------------------------------------------------------------------------
-def run_repl(src: Optional[str] = None):
+def _unicode_ok(stream=None) -> bool:
+    enc = getattr(stream or sys.stdout, "encoding", None) or "ascii"
+    try:
+        "█▁•".encode(enc)
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+def _ramp(uni: bool) -> str:
+    return " ▁▂▃▄▅▆▇█" if uni else " .:-=+*#@"
+
+
+def _frame_at(buf: np.ndarray, t_sec: float, n: int = 2048) -> np.ndarray:
+    if buf is None or not len(buf):
+        return np.zeros((n, 2))
+    s0 = max(0, min(len(buf) - 1, int(t_sec * SR)))
+    f = buf[s0:s0 + n]
+    return f if len(f) == n else np.vstack([f, np.zeros((n - len(f), buf.shape[1]))])
+
+
+def viz_vu(frame: np.ndarray, width: int = 40, uni: bool = True) -> str:
+    out = []
+    for ch, name in ((0, "L"), (1, "R")):
+        x = frame[:, ch] if frame.ndim == 2 else frame
+        rms = float(np.sqrt(np.mean(x * x))) if len(x) else 0.0
+        db = 20 * math.log10(rms) if rms > 1e-9 else -96.0
+        k = int(round(max(0.0, min(1.0, (db + 48) / 48)) * width))
+        full = "█" if uni else "#"
+        out.append(f"{name} |{full * k}{' ' * (width - k)}| {db:6.1f} dB")
+    return "\n".join(out)
+
+
+def viz_scope(frame: np.ndarray, width: int = 64, height: int = 9, uni: bool = True) -> str:
+    x = frame.mean(axis=1) if frame.ndim == 2 else frame
+    idx = np.linspace(0, len(x) - 1, width).astype(int)
+    ys = np.clip(x[idx], -1, 1)
+    rows = [[" "] * width for _ in range(height)]
+    mid = height // 2
+    for c in range(width):
+        rows[mid][c] = "─" if uni else "-"
+    dot = "•" if uni else "*"
+    for c, y in enumerate(ys):
+        r = int(round((1 - (y + 1) / 2) * (height - 1)))
+        rows[r][c] = dot
+    return "\n".join("".join(r) for r in rows)
+
+
+def viz_spectrum(frame: np.ndarray, width: int = 48, height: int = 8, uni: bool = True) -> str:
+    x = frame.mean(axis=1) if frame.ndim == 2 else frame
+    spec = np.abs(np.fft.rfft(x * np.hanning(len(x))))
+    freqs = np.fft.rfftfreq(len(x), 1 / SR)
+    edges = np.geomspace(40, 16000, width + 1)
+    bands = []
+    for a, b in zip(edges, edges[1:]):
+        m = spec[(freqs >= a) & (freqs < b)]
+        v = float(m.max()) if m.size else 0.0
+        bands.append(20 * math.log10(v / (len(x) / 4) + 1e-9))
+    lv = [max(0.0, min(1.0, (d + 60) / 60)) for d in bands]
+    ramp = _ramp(uni)
+    lines = []
+    for row in range(height, 0, -1):
+        s = ""
+        for v in lv:
+            h = v * height - (row - 1)
+            s += ramp[-1] if h >= 1 else (ramp[int(h * (len(ramp) - 1))] if h > 0 else " ")
+        lines.append(s)
+    lines.append("40Hz" + " " * max(0, width - 9) + "16k")
+    return "\n".join(lines)
+
+
+_DRUM_ABBR = {"kick": "KK", "snare": "SN", "hat": "hh", "ohat": "OH", "clap": "CP", "tom": "TM", "crash": "CR", "metal": "MT"}
+
+
+def viz_tracker(song: Song, tick: int = 0, rows: int = 9, max_tracks: int = 6) -> str:
+    """Tracker view around the playhead: one row per 16th, one column per track."""
+    step = _SIX
+    cur = tick // step
+    tpb = song.ticks_per_bar
+    tracks = song.tracks[:max_tracks]
+    grid: Dict[Tuple[int, int], str] = {}
+    hold: Dict[Tuple[int, int], bool] = {}
+    lo = max(0, cur - rows // 2)
+    hi = lo + rows
+    for c in song.arrangement:
+        if c.track >= len(tracks):
+            continue
+        p = song.pattern_of(c)
+        if p is None:
+            continue
+        for n in p.notes:
+            at = (c.bar * tpb + n.start) // step
+            ln = max(1, n.length // step)
+            if at + ln < lo or at > hi:
+                continue
+            lab = _DRUM_ABBR.get(n.inst or "", (n.inst or "")[:2]) if song.tracks[c.track].drum else note_name(n.pitch)
+            if (at, c.track) not in grid or song.tracks[c.track].drum:
+                grid[(at, c.track)] = lab if (at, c.track) not in grid else (grid[(at, c.track)] + "+" if len(grid[(at, c.track)]) < 4 else grid[(at, c.track)])
+            for k in range(1, ln):
+                hold[(at + k, c.track)] = True
+    head = "      " + " ".join(f"{t.name[:5]:<5}" for t in tracks)
+    lines = [head]
+    for r in range(lo, hi):
+        if r < 0:
+            lines.append("")
+            continue
+        bar, st = divmod(r * step, tpb)
+        cells = []
+        for ti in range(len(tracks)):
+            v = grid.get((r, ti))
+            cells.append(f"{v:<5}" if v else ("  |  " if hold.get((r, ti)) else "  .  "))
+        mark = ">" if r == cur else " "
+        lines.append(f"{mark}{bar + 1:>3}.{st // step + 1:<2}" + " ".join(cells))
+    return "\n".join(lines)
+
+
+def viz_roll_playhead(song: Song, tick: int = 0, width: int = 64) -> str:
+    li = lead_track(song) or 0
+    tpb = song.ticks_per_bar
+    clip = next((c for c in song.arrangement if c.track == li and song.pattern_of(c) and c.bar * tpb <= tick < (c.bar + song.pattern_of(c).bars) * tpb), None)
+    if clip is None:
+        return ascii_roll(song, li, None, width)
+    txt = ascii_roll(song, li, clip.pattern, width).split("\n")
+    col = (tick - clip.bar * tpb) // _SIX
+    out = [txt[0] + f"  (bar {tick // tpb + 1})"]
+    for ln in txt[1:]:
+        pre, _, cells = ln.partition("|")
+        if 0 <= col < len(cells):
+            cells = cells[:col] + ("|" if cells[col] in " -" else cells[col]) + cells[col + 1:]
+        out.append(pre + "|" + cells)
+    return "\n".join(out)
+
+
+def studio_frame(song: Song, buf: Optional[np.ndarray], t_sec: float, uni: Optional[bool] = None) -> str:
+    uni = _unicode_ok() if uni is None else uni
+    tick = int(t_sec / song.tick_seconds())
+    total = song.length_bars() * song.ticks_per_bar * song.tick_seconds()
+    bar, rem = divmod(tick, song.ticks_per_bar)
+    fr = _frame_at(buf, t_sec)
+    hdr = (f"{song.title} | {song.bpm:g} bpm {song.key} {song.scale} | {int(t_sec // 60)}:{t_sec % 60:04.1f} / "
+           f"{int(total // 60)}:{total % 60:04.1f} | bar {bar + 1} beat {rem // PPQ + 1}")
+    return "\n".join([hdr, "=" * min(len(hdr), 78), viz_tracker(song, tick), "", viz_vu(fr, 40, uni), "",
+                      "scope", viz_scope(fr, 64, 7, uni), "spectrum", viz_spectrum(fr, 48, 6, uni)])
+
+
+def _loudest_t(song: Song) -> Tuple[np.ndarray, float]:
+    buf = render_song(song, tail=0.5)
+    n = 2048
+    if len(buf) < n:
+        return buf, 0.0
+    e = np.square(buf[: len(buf) // n * n].mean(axis=1)).reshape(-1, n).sum(axis=1)
+    return buf, float(int(e.argmax()) * n / SR)
+
+
+def _static(fn):
+    def v(song):
+        buf, t = _loudest_t(song)
+        return fn(song, buf, t)
+    return v
+
+
+VISUALIZERS["tracker"] = lambda s: viz_tracker(s, 0, 16)
+VISUALIZERS["vu"] = _static(lambda s, b, t: viz_vu(_frame_at(b, t), 40, _unicode_ok()))
+VISUALIZERS["scope"] = _static(lambda s, b, t: viz_scope(_frame_at(b, t), 64, 9, _unicode_ok()))
+VISUALIZERS["spectrum"] = _static(lambda s, b, t: viz_spectrum(_frame_at(b, t), 48, 8, _unicode_ok()))
+VISUALIZERS["dashboard"] = _static(lambda s, b, t: studio_frame(s, b, t))
+
+STUDIO_COMMANDS = {
+    "play": "/play [--loop]       play the song (sounddevice / simpleaudio / winsound / OS player)",
+    "stop": "/stop                stop playback",
+    "watch": "/watch [secs]        live dashboard: tracker playhead, VU, scope, spectrum (Ctrl+C to stop)",
+    "dashboard": "/dashboard [bar]     one dashboard frame at a bar (default: loudest moment)",
+    "tracker": "/tracker [bar]       tracker view at a bar",
+    "vu": "/vu  /scope  /spectrum   one meter frame at the loudest moment",
+    "suggest": "/suggest             ML next-note ideas for the current pattern (Tab also completes them)",
+    "quit": "/quit                leave",
+}
+
+
+def studio_completions(interp: "Interpreter", text: str, line: str) -> List[str]:
+    """Tab completion: slash commands, op params/values, and ML next-note tokens."""
+    words = line.split()
+    if line.startswith("/") and (len(words) <= 1 and not line.endswith(" ")):
+        names = sorted(set(list(OPS) + list(STUDIO_COMMANDS) + list(SLASH_COMMANDS) + ["help", "new", "demo", "gen", "load", "save", "show", "info", "bpm",
+                                                                                       "key", "track", "pat", "clear", "undo", "transpose", "render",
+                                                                                       "export", "presets", "styles", "roll", "viz", "op", "ml", "scope", "spectrum"]))
+        return ["/" + n for n in names if n.startswith(text.lstrip("/"))]
+    if line.startswith("/"):
+        cmd = words[0][1:]
+        if "=" in text:
+            k, _, v = text.partition("=")
+            vals = {"style": style_names(), "context": list(GAME_CONTEXTS), "names": list(SFX) + list(SFX_SETS), "model": ["tiny", "rules"] + list(ML_BACKENDS),
+                    "kind": ["next", "chords", "groove"]}.get(k, [])
+            return [f"{k}={x}" for x in vals if x.startswith(v)]
+        if cmd in ("gen",):
+            return [x for x in style_names() if x.startswith(text)]
+        if cmd == "viz":
+            return [x for x in VISUALIZERS if x.startswith(text)]
+        if cmd in OPS:
+            return [f"{k}=" for k in OPS[cmd].params if k.startswith(text)]
+        return []
+    try:
+        sug = [x["note"] for x in suggest_next(interp.song, interp.track if interp.song.tracks else None, interp.pattern, 5)]
+    except Exception:
+        sug = []
+    return [x for x in sug if x.startswith(text.lower())] or ([] if text else sug)
+
+
+def _enable_ansi():
+    if os.name == "nt":
+        os.system("")          # turns on VT100 escape processing in Windows consoles
+
+
+def _setup_readline(interp: "Interpreter"):
+    try:
+        import readline  # type: ignore
+    except ImportError:
+        try:
+            import pyreadline3 as readline  # type: ignore  # noqa: F401  (Windows: pip install pyreadline3)
+        except ImportError:
+            return False
+    state: Dict[str, List[str]] = {}
+
+    def comp(text, i):
+        if i == 0:
+            state["m"] = studio_completions(interp, text, readline.get_line_buffer())
+        m = state.get("m", [])
+        return m[i] if i < len(m) else None
+    try:
+        readline.set_completer_delims(" \t\n;")
+        readline.set_completer(comp)
+        readline.parse_and_bind("tab: complete")
+        hist = home_dir() / "studio_history"
+        try:
+            readline.read_history_file(str(hist))
+        except (OSError, AttributeError):
+            pass
+        import atexit
+        atexit.register(lambda: _safe(lambda: readline.write_history_file(str(hist))))
+    except Exception:
+        return False
+    return True
+
+
+def _safe(fn):
+    try:
+        fn()
+    except Exception:
+        pass
+
+
+def studio_command(interp: "Interpreter", state: dict, line: str, write: Callable[[str], None]) -> bool:
+    """Handle studio-only commands. Returns True if handled."""
+    parts = line.strip().split()
+    if not parts or not parts[0].startswith("/"):
+        return False
+    cmd, args = parts[0][1:].lower(), parts[1:]
+    s = interp.song
+    if cmd in ("help", "h", "?"):
+        write(HELP_TEXT + "Studio:\n" + "\n".join("  " + v for v in STUDIO_COMMANDS.values()) +
+              "\nIntent ops (also plain English, e.g. 'make a boss theme 16 bars', 'make it loop', 'critique this'):\n  " +
+              " ".join("/" + n for n in OPS) + "\nTab completes commands, op params and next notes.")
+        return True
+    if cmd in ("play", "stop"):
+        audio = state.get("audio") or AudioOut()
+        state["audio"] = audio
+        if cmd == "stop":
+            audio.stop()
+            write("stopped")
+            return True
+        loop = "--loop" in args
+        buf = render_song(s, *(s.loop_range() if loop else (0, s.length_bars())), seamless=loop)
+        state["buf"], state["t0"] = buf, time.monotonic()
+        if audio.backend == "none":
+            write("no audio output found (pip install sounddevice); use /watch to see it or /render to a file")
+        else:
+            audio.play(buf, loop=loop)
+            write(f"playing via {audio.backend} ({len(buf) / SR:.1f}s){' looped' if loop else ''} - /watch to visualize, /stop")
+        return True
+    if cmd in ("watch",):
+        secs = float(args[0]) if args else None
+        audio = state.get("audio")
+        buf = state.get("buf") if (audio and audio.playing) else None
+        if buf is None:
+            buf = render_song(s)
+        total = len(buf) / SR
+        tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+        if not tty:
+            write(studio_frame(s, buf, min(secs or 0.0, total)))
+            return True
+        _enable_ansi()
+        t0 = state.get("t0") if (audio and audio.playing) else time.monotonic()
+        try:
+            while True:
+                if audio and audio.playing:
+                    t = audio.position_samples() / SR
+                else:
+                    t = time.monotonic() - t0
+                if t >= total or (secs and time.monotonic() - t0 >= secs and not (audio and audio.playing)):
+                    break
+                sys.stdout.write("\x1b[H\x1b[J" + studio_frame(s, buf, t % total) + "\n(Ctrl+C to stop)\n")
+                sys.stdout.flush()
+                time.sleep(1 / 12)
+        except KeyboardInterrupt:
+            pass
+        return True
+    if cmd in ("dashboard", "tracker", "vu", "scope", "spectrum"):
+        if args and args[0].isdigit():
+            t = (int(args[0]) - 1) * s.ticks_per_bar * s.tick_seconds()
+            buf = render_song(s)
+        else:
+            buf, t = _loudest_t(s)
+        fr = _frame_at(buf, t)
+        uni = _unicode_ok()
+        tick = int(t / s.tick_seconds())
+        write({"dashboard": lambda: studio_frame(s, buf, t, uni), "tracker": lambda: viz_tracker(s, tick, 16),
+               "vu": lambda: viz_vu(fr, 40, uni), "scope": lambda: viz_scope(fr, 64, 9, uni),
+               "spectrum": lambda: viz_spectrum(fr, 48, 8, uni)}[cmd]())
+        return True
+    if cmd == "suggest" and not args:
+        sug = suggest_next(s, interp.track if s.tracks else None, interp.pattern, 5)
+        write("next: " + "  ".join(f"{x['note']}({x['p']:.0%})" for x in sug) if sug else "no suggestion (empty song?)")
+        return True
+    return False
+
+
+def run_studio(src: Optional[str] = None, inp=None, out=None) -> int:
     load_plugins()
     interp = Interpreter(load_any(src) if src else new_song())
-    audio = None
-    print(f"{APP_NAME} terminal studio - /help for commands, /play to listen, /quit to exit")
+    write = (lambda t: (out.write(t + "\n"), out.flush())) if out else print
+    _enable_ansi()
+    interactive = inp is None and sys.stdin.isatty()
+    if interactive:
+        _setup_readline(interp)
+    state: Dict[str, Any] = {}
+    write(f"{APP_NAME} terminal studio - type notes, .8bt lines, English or /commands. /help, Tab to complete, /quit to exit")
+    lines = iter(inp) if inp is not None else None
     while True:
         try:
-            line = input("8bms> ")
-        except (EOFError, KeyboardInterrupt):
-            print()
+            if lines is not None:
+                line = next(lines).rstrip("\n")
+            else:
+                cur = interp.song.tracks[interp.track].name if interp.song.tracks and interp.track < len(interp.song.tracks) else "-"
+                line = input(f"8bms {cur}.{interp.pattern}> ")
+        except (EOFError, KeyboardInterrupt, StopIteration):
             break
         if line.strip() in ("/quit", "/exit", "quit", "exit"):
             break
-        if line.strip() in ("/play", "/stop"):
-            audio = audio or AudioOut()
-            if line.strip() == "/stop":
-                audio.stop()
-            else:
-                audio.play(render_song(interp.song))
-                print(f"playing via {audio.backend}")
-            continue
         try:
-            print(interp.execute(line))
+            if not studio_command(interp, state, line, write):
+                write(interp.execute(line))
         except Exception as e:
-            print(f"error: {e}")
-    if audio:
-        audio.close()
+            write(f"error: {e}")
+    if state.get("audio"):
+        state["audio"].close()
+    return 0
+
+
+def run_repl(src: Optional[str] = None):
+    return run_studio(src)
 
 
 # ---------------------------------------------------------------------------
@@ -4238,6 +6236,19 @@ def launch_gui(path: Optional[str] = None, screenshot: Optional[str] = None, sel
             tm.add_checkbutton(label="Snap to Scale", variable=self.v["snapscale"])
             tm.add_command(label="Score Console (type music)...", command=self.open_console)
             m.add_cascade(label="Tools", menu=tm)
+            am = tk.Menu(m, tearoff=0)
+            am.add_command(label="Compose (tiny model)...", command=self.ai_compose)
+            am.add_command(label="Suggest Next Note", accelerator="Ctrl+Space", command=self.ai_suggest)
+            am.add_command(label="Variation", command=lambda: self.ai_op("variation", amount=0.3))
+            am.add_command(label="Extend +8 bars", command=lambda: self.ai_op("extend", bars=8))
+            am.add_command(label="Humanize", command=lambda: self.ai_op("humanize", amount=0.5))
+            am.add_command(label="Auto-arrange", command=lambda: self.ai_op("arrange"))
+            am.add_command(label="Make Seamless Loop", command=lambda: self.ai_op("loopify"))
+            am.add_separator()
+            am.add_command(label="Critique", command=lambda: self.ai_report("critique"))
+            am.add_command(label="Describe", command=lambda: self.ai_report("describe"))
+            am.add_command(label="Chords of this Pattern", command=self.ai_chords)
+            m.add_cascade(label="AI", menu=am)
             self.plugin_menu = tk.Menu(m, tearoff=0, postcommand=self.fill_plugin_menu)
             m.add_cascade(label="Plugins", menu=self.plugin_menu)
             self.midi_menu = tk.Menu(m, tearoff=0, postcommand=self.fill_midi_menu)
@@ -5119,7 +7130,8 @@ def launch_gui(path: Optional[str] = None, screenshot: Optional[str] = None, sel
                             ("<Control-S>", self.cmd_save_as), ("<Control-z>", self.undo), ("<Control-y>", self.redo), ("<Control-Z>", self.redo),
                             ("<Control-c>", self.copy), ("<Control-x>", self.cut), ("<Control-v>", self.paste), ("<Control-d>", self.duplicate),
                             ("<Control-a>", self.select_all), ("<Control-e>", lambda: self.cmd_export_audio("song")),
-                            ("<Control-k>", lambda: self.v["keys"].set(not self.v["keys"].get())), ("<F1>", self.show_help)):
+                            ("<Control-k>", lambda: self.v["keys"].set(not self.v["keys"].get())), ("<F1>", self.show_help),
+                            ("<Control-space>", self.ai_suggest)):
                 r.bind_all(seq, lambda e, fn=fn: ctl(e, fn))
 
         # ---------------------------------------------------------- MIDI / Akai APC
@@ -5304,6 +7316,101 @@ def launch_gui(path: Optional[str] = None, screenshot: Optional[str] = None, sel
                 w.destroy()
             ttk.Button(w, text="Generate", style="Accent.TButton", command=go).grid(row=3, column=0, columnspan=2, pady=8)
 
+        # ---------------------------------------------------------- AI (tiny offline model)
+        def ai_seed(self) -> int:
+            self._ai_n = getattr(self, "_ai_n", 0) + 1
+            return self._ai_n
+
+        def ai_op(self, name: str, **kw):
+            """Run a song-making op on the current song and load the result (undoable)."""
+            try:
+                res = run_op(name, src=self.song, seed=self.ai_seed(), **kw)
+            except Exception as e:
+                return self.status(f"{name} failed: {e}")
+            if "handle" not in res:
+                return self.status(_terse(res))
+            old, ti, pn, path = self.song.to_dict(), self.cur_track, self.cur_pattern, self.path
+            self.set_song(load_project(handle_path(res["handle"])), path)
+            self.undo_stack.append(old)
+            self.redo_stack.clear()
+            if ti < len(self.song.tracks):
+                self.cur_track = ti
+                self.cur_pattern = pn if pn in self.song.tracks[ti].patterns else next(iter(self.song.tracks[ti].patterns), "A")
+                self.refresh_all()
+            self.mark_dirty()
+            self.status(f"{name}: {self.song.length_bars()} bars" + (f", score {res['score']}" if "score" in res else ""))
+
+        def ai_report(self, name: str):
+            res = run_op(name, src=self.song)
+            if name == "critique":
+                text = f"Score: {res.get('score')}/100\n\n" + "\n".join(f"- {t}" for t in res.get("tips", [])) + \
+                    "\n\n" + "\n".join(f"{k}: {v}" for k, v in sorted(res.items()) if k not in ("score", "tips"))
+            else:
+                text = res.get("summary", "") + "\n\n" + "\n".join(f"{k}: {v}" for k, v in sorted(res.items()) if k != "summary")
+            self.text_window(name.capitalize(), text)
+            return res
+
+        def ai_chords(self):
+            t = self.track
+            if t is None or t.drum:
+                return self.status("Pick a melodic track to read its chords")
+            res = run_op("suggest", src=self.song, kind="chords", track=str(self.cur_track), pattern=self.cur_pattern)
+            self.status(f"Chords of {t.name}.{self.cur_pattern}: {res['chords']}   ({res['roman']})")
+            return res
+
+        def ai_suggest(self):
+            """Insert the model's most likely next note; press again to swap in the next alternative."""
+            t, p = self.track, self.pattern
+            if t is None or p is None:
+                return
+            last = getattr(self, "_ai_last", None)
+            if last and last[0] == (self.cur_track, self.cur_pattern) and last[1] in p.notes:
+                p.notes.remove(last[1])
+                sug, i = last[2], (last[3] + 1) % max(1, len(last[2]))
+            else:
+                sug, i = suggest_next(self.song, self.cur_track, self.cur_pattern, k=4), 0
+                if sug:
+                    self.push_undo()
+            if not sug:
+                self._ai_last = None
+                return self.status("No suggestion for this pattern yet")
+            x = sug[i]
+            if t.drum:
+                n = Note(x["at"], x["ticks"], 60, 0.8, x["note"])
+            else:
+                n = Note(x["at"], x["ticks"], x["midi"], 0.8)
+            p.bars = max(p.bars, n.end // self.song.ticks_per_bar + (1 if n.end % self.song.ticks_per_bar else 0))
+            self.add_notes([n])
+            self._ai_last = ((self.cur_track, self.cur_pattern), n, sug, i)
+            self.refresh_editors()
+            self.preview(n.pitch, x["note"] if t.drum else None)
+            self.status(f"Suggested {x['note']} ({x['p']:.0%})  others: " + ", ".join(f"{y['note']} {y['p']:.0%}" for j, y in enumerate(sug) if j != i)
+                        + "   (Ctrl+Space again for the next one)")
+
+        def ai_compose(self):
+            w = tk.Toplevel(self.root, bg=THEME["panel"])
+            w.title("Compose (tiny model, offline)")
+            w.transient(self.root)
+            pv, cv, bv, seedv = tk.StringVar(value="calm night in space"), tk.StringVar(value=""), tk.IntVar(value=16), tk.StringVar(value="0")
+            rows = (("Describe it", ttk.Entry(w, textvariable=pv, width=34)),
+                    ("Game context", ttk.Combobox(w, textvariable=cv, values=[""] + list(GAME_CONTEXTS), state="readonly")),
+                    ("Bars", ttk.Spinbox(w, from_=4, to=128, increment=4, textvariable=bv, width=6)),
+                    ("Seed", ttk.Entry(w, textvariable=seedv, width=10)))
+            for i, (lbl, wid) in enumerate(rows):
+                ttk.Label(w, text=lbl).grid(row=i, column=0, sticky="w", padx=8, pady=4)
+                wid.grid(row=i, column=1, sticky="w", padx=8, pady=4)
+
+            def go():
+                seed = int(seedv.get()) if seedv.get().strip().lstrip("-").isdigit() else 0
+                res = run_op("compose", prompt=pv.get(), context=cv.get() or None, bars=int(bv.get()), seed=seed, candidates=3)
+                old = self.song.to_dict()
+                self.set_song(load_project(handle_path(res["handle"])), None)
+                self.undo_stack.append(old)
+                self.mark_dirty()
+                self.status(f"Composed '{res['title']}' ({res['style']}, score {res['score']})")
+                w.destroy()
+            ttk.Button(w, text="Compose", style="Accent.TButton", command=go).grid(row=len(rows), column=0, columnspan=2, pady=8)
+
         def open_console(self):
             w = tk.Toplevel(self.root, bg=THEME["panel"])
             w.title("Score console - type notes, .8bt lines, /commands or plain English")
@@ -5347,7 +7454,7 @@ def launch_gui(path: Optional[str] = None, screenshot: Optional[str] = None, sel
         def autosave_tick(self):
             try:
                 if self.dirty:
-                    autosave_path().write_text(json.dumps({"path": str(self.path or ""), "song": self.song.to_dict()}))
+                    autosave_path().write_text(json.dumps({"path": str(self.path or ""), "song": self.song.to_dict()}), encoding="utf-8")
             except Exception:
                 pass
             finally:
@@ -6382,7 +8489,7 @@ def launch_gui(path: Optional[str] = None, screenshot: Optional[str] = None, sel
             print(f"could not open {path}: {e}", file=sys.stderr)
     elif autosave_path().exists() and not (selftest or screenshot):
         try:
-            d = json.loads(autosave_path().read_text())
+            d = json.loads(autosave_path().read_text(encoding="utf-8"))
             if messagebox.askyesno("Recover", "Unsaved work from your last session was found. Recover it?"):
                 song = Song.from_dict(d["song"])
                 spath = Path(d["path"]) if d.get("path") else None
@@ -6390,7 +8497,7 @@ def launch_gui(path: Optional[str] = None, screenshot: Optional[str] = None, sel
             pass
     if song is None:
         song = demo_song() if (first or selftest or screenshot) else new_song()
-    (home_dir() / "launched").write_text(APP_VERSION)
+    (home_dir() / "launched").write_text(APP_VERSION, encoding="utf-8")
     app.set_song(song, spath)
     app.roll.scroll_to_notes()
     if first:
@@ -6450,6 +8557,15 @@ def launch_gui(path: Optional[str] = None, screenshot: Optional[str] = None, sel
                 time.sleep(0.03)
             app.stop()
             app.v["loop"].set(False)
+            # AI menu: suggest a note, variation, critique (tiny offline model)
+            app.select_track(0)
+            k = len(app.pattern.notes)
+            app.ai_suggest()
+            assert len(app.pattern.notes) in (k, k + 1)
+            app.undo() if len(app.pattern.notes) == k + 1 else None
+            app.ai_op("humanize", amount=0.3)
+            app.undo()
+            assert run_op("critique", src=app.song)["score"] >= 0
             app.kb.highlight(64, True)
             app.refresh_all()
             root.update()
@@ -6501,22 +8617,51 @@ examples:
   8bms render boss.8bt -o boss.wav [--loop|--seamless] [--stems stems/]
   8bms export boss.8bt --js boss.js      (also --py --json --score --project --to <plugin>)
   8bms do "gen town 8; bpm 100; /render town.wav"
-  8bms acp | mcp | serve | repl          agent / tool / HTTP / terminal front-ends
+  8bms acp | mcp | serve | studio        agent / tool / HTTP / terminal front-ends
   8bms plugin new effect my-fx && 8bms plugin test my-fx
+
+intent ops (same names in MCP tools, POST /ops/<name>, /slash commands):
+  8bms compose "tense boss fight" --bars 16 --seed 7 --wav boss.wav --fields handle,score
+  8bms variation @last --amount 0.3     8bms extend @last --bars 8     8bms loopify @last --wav loop.wav
+  8bms remix song.8bt --style lofi-break   8bms soundpack platformer -o sfx/   8bms stems @last -o stems/
+  8bms master song.wav -o song-master.wav  8bms describe @last   8bms critique @last   8bms diff a.8bt b.8bt
+  8bms suggest @last --kind chords      8bms intent "make a calm town theme"   8bms library contexts
+  8bms tools --json   8bms batch jobs.jsonl -o results.jsonl   8bms openapi   8bms schema 8bt
+
+global flags: --json (machine output)  --fields a,b (keep only these keys)  -q  --no-plugins
+handles: ops that make songs return "handle": "@1a2b3c4d"; use @id or @last as any song argument.
 """
 
 
+def _pretty(res: Any) -> str:
+    if isinstance(res, dict) and any(isinstance(v, (dict, list)) and len(str(v)) > 70 for v in res.values()):
+        lines = []
+        for k, v in res.items():
+            if isinstance(v, dict):
+                lines.append(f"{k}:")
+                lines += [f"  {kk}: {vv if not isinstance(vv, (dict, list)) else json.dumps(vv, separators=(',', ':'))}" for kk, vv in v.items()]
+            elif isinstance(v, list) and len(str(v)) > 70:
+                lines.append(f"{k}:")
+                lines += [f"  - {x if not isinstance(x, (dict, list)) else json.dumps(x, separators=(',', ':'))}" for x in v]
+            else:
+                lines.append(f"{k}: {v}")
+        return "\n".join(lines)
+    return _terse(res) if isinstance(res, dict) else str(res)
+
+
 class _Out:
-    def __init__(self, json_mode: bool = False, quiet: bool = False):
-        self.json, self.quiet = json_mode, quiet
+    def __init__(self, json_mode: bool = False, quiet: bool = False, fields: Optional[str] = None):
+        self.json, self.quiet, self.fields = json_mode, quiet, fields
 
     def __call__(self, res: Any, text: Optional[str] = None):
         if self.quiet:
             return
+        if self.fields and isinstance(res, dict):
+            res, text = pick_fields(res, self.fields), None
         if self.json:
             print(_jdump(res))
         else:
-            print(text if text is not None else (_terse(res) if isinstance(res, dict) else str(res)))
+            print(text if text is not None else _pretty(res))
 
 
 def _kv_args(items: List[str]) -> Dict[str, str]:
@@ -6582,8 +8727,19 @@ def build_parser() -> argparse.ArgumentParser:
     sv = sub.add_parser("serve", help="local HTTP API")
     sv.add_argument("--host", default="127.0.0.1")
     sv.add_argument("--port", type=int, default=8765)
-    rp = sub.add_parser("repl", help="terminal studio")
-    rp.add_argument("src", nargs="?")
+    for n in ("studio", "repl"):
+        rp = sub.add_parser(n, help="terminal studio: slash commands, Tab completion, live tracker/VU/scope/spectrum" if n == "studio" else "alias of studio")
+        rp.add_argument("src", nargs="?")
+    tl = sub.add_parser("tools", help="list every op as a tool card (name, schema, CLI/HTTP/MCP forms)")
+    tl.add_argument("name", nargs="?")
+    bt = sub.add_parser("batch", help="run jobs.jsonl ({id, op, args, fields} per line; '$prev'/'$id' reference earlier handles)")
+    bt.add_argument("jobs", help="jobs.jsonl path or '-' for stdin")
+    bt.add_argument("-o", "--out", help="write results.jsonl here (default stdout)")
+    oa = sub.add_parser("openapi", help="print the OpenAPI 3.1 spec of the HTTP API")
+    oa.add_argument("-o", "--out")
+    sc = sub.add_parser("schema", help="print a JSON Schema: 8bt | 8bms | plugin | ops")
+    sc.add_argument("which", choices=["8bt", "8bms", "plugin", "ops"])
+    sc.add_argument("-o", "--out")
     md = sub.add_parser("midi", help="list MIDI inputs / monitor a controller (Akai APC etc.)")
     md.add_argument("--port")
     md.add_argument("--seconds", type=float, default=0)
@@ -6611,10 +8767,19 @@ def build_parser() -> argparse.ArgumentParser:
     for name, op in OPS.items():
         if name in reserved or name.replace("_", "-") in reserved:
             continue
-        p = sub.add_parser(name, help=f"[op:{op.owner}] {op.help[:60]}")
+        p = sub.add_parser(name, help=f"[op:{op.owner}] {op.help[:60]}", description=op.help)
+        pos = [k for k, v in op.params.items() if v.get("pos")]
+        for k in pos:
+            p.add_argument(f"_pos_{k}", nargs="*" if op.params[k].get("join") else "?", metavar=k, default=None, help=op.params[k].get("help"))
         for k, spec in op.params.items():
-            p.add_argument(f"--{k.replace('_', '-')}", dest=k, required=bool(spec.get("required")), default=spec.get("default"), help=spec.get("help"))
-        p.set_defaults(_op=name)
+            flags = [f"--{k.replace('_', '-')}"] + (["-o"] if k == "out" else [])
+            h = (spec.get("help") or "") + (f" (default {spec['default']})" if spec.get("default") not in (None, "") else "")
+            if spec.get("type") == "bool":
+                p.add_argument(*flags, dest=k, action="store_const", const=True, default=None, help=h)
+                p.add_argument(f"--no-{k.replace('_', '-')}", dest=k, action="store_const", const=False, help=argparse.SUPPRESS)
+            else:
+                p.add_argument(*flags, dest=k, default=None, help=h)
+        p.set_defaults(_op=name, _posk=pos)
     return ap
 
 
@@ -6629,22 +8794,42 @@ def _resolve_plugin(name_or_path: str) -> str:
     raise SystemExit(f"no plugin folder or installed plugin named {name_or_path!r}")
 
 
+def _utf8_stdio():
+    """Windows consoles default to cp1252; keep note names and meters printable everywhere."""
+    for st in (sys.stdout, sys.stderr):
+        try:
+            if st and (st.encoding or "").lower().replace("-", "") not in ("utf8",):
+                st.reconfigure(errors="replace")  # type: ignore[attr-defined]
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     flags = {f: False for f in ("--json", "--quiet", "-q", "--no-plugins")}
     keep: List[str] = []
+    fields = None
+    skip = False
     for i, a in enumerate(argv):
+        if skip:
+            skip = False
+            continue
         # `export --json out.json` is the JSON exporter, not the global output flag
         if a == "--json" and keep[:1] == ["export"] and i + 1 < len(argv) and not argv[i + 1].startswith("-"):
             keep.append(a)
         elif a in flags:
             flags[a] = True
+        elif a == "--fields" and i + 1 < len(argv):
+            fields, skip = argv[i + 1], True
+        elif a.startswith("--fields="):
+            fields = a.split("=", 1)[1]
         else:
             keep.append(a)
     argv = keep
     if flags["--no-plugins"]:
         os.environ["EIGHTBMS_NO_PLUGINS"] = "1"
-    out = _Out(flags["--json"], flags["--quiet"] or flags["-q"])
+    _utf8_stdio()
+    out = _Out(flags["--json"], flags["--quiet"] or flags["-q"], fields)
     if not argv:
         return launch_gui()
     if argv[0] not in ("acp", "mcp", "gui") and not (argv[0] == "plugin" and len(argv) > 1 and argv[1] in ("validate", "test", "new", "build", "package")):
@@ -6664,7 +8849,56 @@ def main(argv: Optional[List[str]] = None) -> int:
 def _dispatch(a, out: _Out) -> Optional[int]:
     c = a.cmd
     if getattr(a, "_op", None):
-        out(run_op(a._op, **{k: v for k, v in vars(a).items() if k not in ("cmd", "_op") and v is not None}))
+        kw = {k: v for k, v in vars(a).items() if k not in ("cmd", "_op", "_posk") and not k.startswith("_pos_") and v is not None}
+        for k in getattr(a, "_posk", []):
+            v = getattr(a, f"_pos_{k}", None)
+            if isinstance(v, list):
+                v = OPS[a._op].params[k]["join"].join(v) if v else None
+            if v is not None:
+                kw.setdefault(k, v)
+        res = run_op(a._op, **kw)
+        txt = None
+        if not out.json and not out.fields and isinstance(res, dict):
+            if a._op == "describe":
+                txt = res.get("summary")
+            elif a._op == "critique":
+                txt = f"score {res.get('score')}/100\n" + "\n".join("- " + t for t in res.get("tips", []))
+        out(res, txt)
+    elif c == "tools":
+        tools = op_tools()
+        if a.name:
+            tools = [t for t in tools if t["name"] == a.name]
+            if not tools:
+                raise KeyError(f"no op {a.name}")
+        out({"tools": tools} if not a.name else tools[0], "\n".join(f"{t['name']:10} {t['description'][:62]}\n           {t['cli']}" for t in tools))
+    elif c == "batch":
+        src = sys.stdin if a.jobs == "-" else open(a.jobs, encoding="utf-8")
+        dst = open(a.out, "w", encoding="utf-8") if a.out else sys.stdout
+        n = bad = 0
+        try:
+            for r in run_batch(src):
+                n += 1
+                bad += not r["ok"]
+                dst.write(_jdump(r) + "\n")
+                dst.flush()
+        finally:
+            if src is not sys.stdin:
+                src.close()
+            if dst is not sys.stdout:
+                dst.close()
+        if a.out:
+            out({"jobs": n, "failed": bad, "results": a.out})
+        return 1 if bad else 0
+    elif c in ("openapi", "schema"):
+        doc = openapi_spec() if c == "openapi" else {"8bt": score_json_schema, "8bms": project_json_schema,
+                                                      "plugin": lambda: MANIFEST_SCHEMA, "ops": lambda: {n: o.json_schema() for n, o in OPS.items()}}[a.which]()
+        txt = json.dumps(doc, indent=2)
+        if a.out:
+            Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+            Path(a.out).write_text(txt + "\n", encoding="utf-8")
+            out({"path": a.out})
+        else:
+            print(txt)
     elif c == "gui":
         return launch_gui(a.file, a.screenshot, a.selftest)
     elif c == "render":
@@ -6729,13 +8963,13 @@ def _dispatch(a, out: _Out) -> Optional[int]:
         run_mcp()
     elif c == "serve":
         srv = make_http_server(a.host, a.port)
-        out({"url": f"http://{a.host}:{a.port}"}, f"serving http://{a.host}:{a.port}  (GET /ops, POST /ops/<name>, POST /prompt)")
+        out({"url": f"http://{a.host}:{a.port}"}, f"serving http://{a.host}:{a.port}  (GET /ops /tools /openapi.json, POST /ops/<name>, POST /prompt)")
         try:
             srv.serve_forever()
         except KeyboardInterrupt:
             pass
-    elif c == "repl":
-        run_repl(a.src)
+    elif c in ("studio", "repl"):
+        return run_studio(a.src)
     elif c == "midi":
         if not midi_available():
             raise ValueError("MIDI needs: pip install mido python-rtmidi")

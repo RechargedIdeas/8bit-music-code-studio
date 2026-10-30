@@ -23,7 +23,7 @@ def test_chorus_widens_and_is_finite():
         assert y.shape == x.shape and np.isfinite(y).all()
         assert np.abs(y[:, 0] - y[:, 1]).max() > 0.01   # stereo spread
         assert bms.EXTRA_FX["chorus"](x, sr, mix=0).tolist() == x.tolist()
-        song = bms.parse_score((ROOT / "example" / "example.8bt").read_text())
+        song = bms.parse_score((ROOT / "example" / "example.8bt").read_text(encoding="utf-8"))
         audio = bms.render_song(song)
         assert np.isfinite(audio).all() and np.abs(audio).max() > 0.05
     finally:

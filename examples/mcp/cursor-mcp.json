@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "8bms": { "command": "8bms", "args": ["mcp"], "env": { "EIGHTBMS_NO_PLUGINS": "0" } }
+  }
+}

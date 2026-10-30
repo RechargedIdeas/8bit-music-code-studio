@@ -15,7 +15,7 @@ def test_mml_export(tmp_path):
     try:
         song = bms.parse_score("bpm 150\ntrack lead inst=lead\npat lead.A: o4 l8 c d e/4 r [c e g]/2 >c/4.")
         out = bms.op_export(song, "mml", str(tmp_path / "x.mml"))
-        text = Path(out["path"]).read_text()
+        text = Path(out["path"]).read_text(encoding="utf-8")
         line = next(l for l in text.splitlines() if l.startswith("A "))
         assert "t150" in line and "o4" in line
         assert " c d e4 r g2 > c4." in line.replace(" v12", ""), line

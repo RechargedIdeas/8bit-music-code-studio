@@ -12,7 +12,7 @@ import eightbit_studio as bms
 
 def test_project_roundtrip(tmp_path, song):
     p = bms.save_project(song, tmp_path / "x.8bms")
-    data = json.loads(p.read_text())
+    data = json.loads(p.read_text(encoding="utf-8"))
     assert data["format"].startswith("8bms") or "song" in data
     back = bms.load_project(p)
     assert back.to_dict() == song.to_dict()
@@ -53,7 +53,7 @@ def test_ffmpeg_formats(tmp_path, song):
 
 def test_python_export_runs_and_matches(tmp_path, song):
     py = bms.op_export(song, "py", str(tmp_path / "song.py"))["path"]
-    r = subprocess.run([sys.executable, py, "-o", str(tmp_path / "fromcode.wav")], capture_output=True, text=True, timeout=120)
+    r = subprocess.run([sys.executable, py, "-o", str(tmp_path / "fromcode.wav")], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     assert r.returncode == 0, r.stderr
     a, _ = bms.read_wav(tmp_path / "fromcode.wav")
     b = bms.render_song(song, tail=1.5)
@@ -62,7 +62,7 @@ def test_python_export_runs_and_matches(tmp_path, song):
 
 def test_python_export_seamless(tmp_path, song):
     py = bms.op_export(song, "py", str(tmp_path / "song.py"))["path"]
-    r = subprocess.run([sys.executable, py, str(tmp_path / "s.wav"), "--seamless"], capture_output=True, text=True, timeout=120)
+    r = subprocess.run([sys.executable, py, str(tmp_path / "s.wav"), "--seamless"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     assert r.returncode == 0, r.stderr
     a, _ = bms.read_wav(tmp_path / "s.wav")
     b = bms.render_song(song, seamless=True)
@@ -72,9 +72,9 @@ def test_python_export_seamless(tmp_path, song):
 @pytest.mark.skipif(not shutil.which("node"), reason="node not installed")
 def test_js_export_passes_node_check(tmp_path, song):
     js = bms.op_export(song, "js", str(tmp_path / "song.js"))["path"]
-    r = subprocess.run(["node", "--check", js], capture_output=True, text=True)
+    r = subprocess.run(["node", "--check", js], capture_output=True, text=True, encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stderr
-    text = (tmp_path / "song.js").read_text()
+    text = (tmp_path / "song.js").read_text(encoding="utf-8")
     assert "AudioContext" in text or "OfflineAudioContext" in text
 
 
@@ -82,7 +82,7 @@ def test_js_export_passes_node_check(tmp_path, song):
 def test_js_export_schedules_notes_in_node(tmp_path, song):
     """Import the module in node with a fake Web Audio API and count scheduled oscillators."""
     js = tmp_path / "song.mjs"
-    js.write_text(bms.export_js(song))
+    js.write_text(bms.export_js(song), encoding="utf-8")
     harness = tmp_path / "h.mjs"
     harness.write_text("""
 let started = 0;
@@ -99,8 +99,8 @@ const buf = await m.renderOffline(44100);
 if (!(buf.length > m.SONG.seconds * 44100)) throw new Error('short render');
 if (!(m.STEP_EVENTS.length === m.SONG.events.length)) throw new Error('step events mismatch');
 console.log(started);
-""")
-    r = subprocess.run(["node", str(harness), js.as_uri()], capture_output=True, text=True, timeout=60)
+""", encoding="utf-8")
+    r = subprocess.run(["node", str(harness), js.as_uri()], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert r.returncode == 0, r.stderr
     assert int(r.stdout.strip().splitlines()[-1]) >= song.note_count() // 2
 

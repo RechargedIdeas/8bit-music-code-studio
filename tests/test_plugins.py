@@ -21,8 +21,8 @@ def write_plugin(root: Path, name: str, body: str, types=("op",), perms=(), vers
     d.mkdir(parents=True)
     (d / "plugin.toml").write_text(
         f'name = "{name}"\nversion = "{version}"\napi_version = "{api}"\ntypes = {json.dumps(list(types))}\n'
-        f'entry = "plug:register"\npermissions = {json.dumps(list(perms))}\ndescription = "test plugin {name}"\n')
-    (d / "plug.py").write_text(body)
+        f'entry = "plug:register"\npermissions = {json.dumps(list(perms))}\ndescription = "test plugin {name}"\n', encoding="utf-8")
+    (d / "plug.py").write_text(body, encoding="utf-8")
     return d
 
 
@@ -65,7 +65,7 @@ def test_manifest_schema():
                 {**good, "permissions": ["root"]}, {**good, "extra": 1}, {k: v for k, v in good.items() if k != "entry"},
                 {**good, "api_version": "^9.0"}):
         assert bms.validate_manifest(bad), bad
-    schema = json.loads(subprocess.run([sys.executable, str(APP), "plugin", "schema"], capture_output=True, text=True).stdout or "{}") \
+    schema = json.loads(subprocess.run([sys.executable, str(APP), "plugin", "schema"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout or "{}") \
         if False else bms.MANIFEST_SCHEMA
     assert schema["required"] and "network" in schema["properties"]["permissions"]["items"]["enum"]
 
@@ -127,7 +127,7 @@ def test_ops_auto_exposed_everywhere(tmp_path, manager):
     assert "B B" in it.execute("/op shout text=b")
     # CLI subcommand + ACP/HTTP use the same registry; check the CLI in a fresh process
     env = {**os.environ, "EIGHTBMS_NO_PLUGINS": "0", "EIGHTBMS_PLUGIN_PATH": str(tmp_path)}
-    r = subprocess.run([sys.executable, str(APP), "shout", "--text", "cli", "--times", "2"], capture_output=True, text=True, env=env, cwd=tmp_path)
+    r = subprocess.run([sys.executable, str(APP), "shout", "--text", "cli", "--times", "2"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=tmp_path)
     assert r.returncode == 0 and "CLI CLI" in r.stdout, r.stderr
 
 
@@ -136,7 +136,7 @@ def test_enable_disable_cli(tmp_path):
     env = {**os.environ, "EIGHTBMS_NO_PLUGINS": "0", "EIGHTBMS_PLUGIN_PATH": str(tmp_path / "pl"), "EIGHTBMS_HOME": str(tmp_path / "home")}
 
     def cli(*a):
-        return subprocess.run([sys.executable, str(APP), *a], capture_output=True, text=True, env=env, cwd=tmp_path)
+        return subprocess.run([sys.executable, str(APP), *a], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=tmp_path)
     lst = json.loads(cli("--json", "plugin", "list").stdout)
     assert any(p["name"] == "good" and p["enabled"] for p in lst["plugins"])
     assert cli("plugin", "disable", "good").returncode == 0
@@ -147,10 +147,10 @@ def test_enable_disable_cli(tmp_path):
 
 def test_install_uninstall_folder(tmp_path):
     env = {**os.environ, "EIGHTBMS_NO_PLUGINS": "0", "EIGHTBMS_HOME": str(tmp_path / "home")}
-    r = subprocess.run([sys.executable, str(APP), "plugin", "install", str(EXAMPLES / "chorus")], capture_output=True, text=True, env=env, cwd=tmp_path)
+    r = subprocess.run([sys.executable, str(APP), "plugin", "install", str(EXAMPLES / "chorus")], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=tmp_path)
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "home" / "plugins" / "chorus" / "plugin.toml").exists()
-    r = subprocess.run([sys.executable, str(APP), "plugin", "uninstall", "chorus"], capture_output=True, text=True, env=env, cwd=tmp_path)
+    r = subprocess.run([sys.executable, str(APP), "plugin", "uninstall", "chorus"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, cwd=tmp_path)
     assert r.returncode == 0 and not (tmp_path / "home" / "plugins" / "chorus").exists()
 
 
@@ -159,7 +159,7 @@ def test_sandbox_blocks_network(tmp_path):
     (d / "tests").mkdir()
     (d / "tests" / "test_net.py").write_text(
         "import socket, pytest\n\ndef test_no_net():\n    with pytest.raises(PermissionError):\n"
-        "        socket.create_connection(('1.1.1.1', 80), timeout=1)\n")
+        "        socket.create_connection(('1.1.1.1', 80), timeout=1)\n", encoding="utf-8")
     assert bms.test_plugin(d, timeout=120)["ok"]
 
 

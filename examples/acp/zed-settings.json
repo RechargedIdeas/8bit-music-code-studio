@@ -1,0 +1,5 @@
+{
+  "agent_servers": {
+    "8Bit Music Code Studio": { "command": "8bms", "args": ["acp"] }
+  }
+}

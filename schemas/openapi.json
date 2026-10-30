@@ -1,0 +1,1548 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "8Bit Music Code Studio HTTP API",
+    "version": "1.0.0",
+    "description": "Start with `8bms serve` (default http://127.0.0.1:8765). One registry powers CLI, HTTP, MCP and ACP."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8765"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "liveness",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/ops": {
+      "get": {
+        "summary": "list ops with JSON schemas",
+        "responses": {
+          "200": {
+            "description": "op map"
+          }
+        }
+      }
+    },
+    "/tools": {
+      "get": {
+        "summary": "tool cards (same as `8bms tools --json`)",
+        "responses": {
+          "200": {
+            "description": "list"
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "this document",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1"
+          }
+        }
+      }
+    },
+    "/prompt": {
+      "post": {
+        "summary": "stateful studio: notes, .8bt lines, /commands or English",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{reply}"
+          }
+        }
+      }
+    },
+    "/ops/render": {
+      "post": {
+        "operationId": "render",
+        "summary": "Render a song to audio (wav/ogg/mp3/flac).",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "file .8bt/.8bms, 'demo' or gen:style:bars:seed"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "output file (extension picks format)",
+                    "default": "out.wav"
+                  },
+                  "loop": {
+                    "type": "boolean",
+                    "description": "render only the loop region",
+                    "default": false
+                  },
+                  "seamless": {
+                    "type": "boolean",
+                    "description": "gapless loop file: loop region (or --bars) with the tail folded into the start",
+                    "default": false
+                  },
+                  "bars": {
+                    "type": "string",
+                    "description": "bar range like 1-8"
+                  },
+                  "stems": {
+                    "type": "string",
+                    "description": "also write per-track stems into this folder"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/export": {
+      "post": {
+        "operationId": "export",
+        "summary": "Export a song as code/data: js, py, json, score (.8bt), project (.8bms) or plugin formats.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song source"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "description": "exporter name"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "output path (default from title)"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src",
+                  "kind"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/gen": {
+      "post": {
+        "operationId": "gen",
+        "summary": "Generate a song in a style. Returns score text, or writes it to out (.8bt/.8bms).",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "style": {
+                    "type": "string",
+                    "description": "style name",
+                    "default": "mellow-space"
+                  },
+                  "bars": {
+                    "type": "integer",
+                    "description": "length in bars",
+                    "default": 16
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "description": "random seed"
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "key like C, F#, Bb"
+                  },
+                  "bpm": {
+                    "type": "number",
+                    "description": "tempo"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "write score/project here"
+                  },
+                  "wav": {
+                    "type": "string",
+                    "description": "also render a WAV"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/info": {
+      "post": {
+        "operationId": "info",
+        "summary": "Summarize a song.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song source"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/check": {
+      "post": {
+        "operationId": "check",
+        "summary": "Validate a score/project; returns ok or the first error.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "file"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/presets": {
+      "post": {
+        "operationId": "presets",
+        "summary": "List instrument presets (and user instruments).",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/styles": {
+      "post": {
+        "operationId": "styles",
+        "summary": "List generator styles.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/score_help": {
+      "post": {
+        "operationId": "score_help",
+        "summary": "Show the .8bt score syntax.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/compose": {
+      "post": {
+        "operationId": "compose",
+        "summary": "Compose a new song from a prompt and/or game context; reranks candidates by critique score.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "description": "free text, e.g. 'tense boss fight 16 bars in E'",
+                    "default": ""
+                  },
+                  "context": {
+                    "type": "string",
+                    "description": "game context: title-screen, menu, overworld, town, shop, forest, dungeon, cave, castle, battle, boss, final-boss, chase, puzzle, stealth, underwater, space, lofi-break, credits, victory, level-clear, game-over, cutscene-sad"
+                  },
+                  "style": {
+                    "type": "string",
+                    "description": "style (overrides context)"
+                  },
+                  "bars": {
+                    "type": "integer",
+                    "description": "length in bars"
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "key like C, F#, Bb"
+                  },
+                  "bpm": {
+                    "type": "number",
+                    "description": "tempo"
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "description": "seed (same args + seed = same result)",
+                    "default": 0
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "tiny (Markov+rules, default) | rules | <ml plugin>",
+                    "default": "tiny"
+                  },
+                  "candidates": {
+                    "type": "integer",
+                    "description": "generate N and keep the best by critique score",
+                    "default": 4
+                  },
+                  "loop": {
+                    "type": "boolean",
+                    "description": "make it a seamless loop (default: from context)"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "also save the song (.8bt/.8bms)"
+                  },
+                  "wav": {
+                    "type": "string",
+                    "description": "also render audio (wav/ogg/mp3/flac)"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/variation": {
+      "post": {
+        "operationId": "variation",
+        "summary": "Make a variation: same form and harmony, re-voiced melody/rhythm details.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "amount": {
+                    "type": "number",
+                    "description": "0..1 how much to change",
+                    "default": 0.3
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "description": "seed (same args + seed = same result)",
+                    "default": 0
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "also save the song (.8bt/.8bms)"
+                  },
+                  "wav": {
+                    "type": "string",
+                    "description": "also render audio (wav/ogg/mp3/flac)"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/extend": {
+      "post": {
+        "operationId": "extend",
+        "summary": "Extend a song by N bars: new melody over the existing accompaniment, ending with a fill.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "bars": {
+                    "type": "integer",
+                    "description": "bars to add",
+                    "default": 8
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "description": "seed (same args + seed = same result)",
+                    "default": 0
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "tiny | rules",
+                    "default": "tiny"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "also save the song (.8bt/.8bms)"
+                  },
+                  "wav": {
+                    "type": "string",
+                    "description": "also render audio (wav/ogg/mp3/flac)"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/arrange": {
+      "post": {
+        "operationId": "arrange",
+        "summary": "Auto-arrange: keep the melody, add chords (Viterbi), bass and a groove in a style.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "style": {
+                    "type": "string",
+                    "description": "style (default: guessed from tempo/scale)"
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "description": "seed (same args + seed = same result)",
+                    "default": 0
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "also save the song (.8bt/.8bms)"
+                  },
+                  "wav": {
+                    "type": "string",
+                    "description": "also render audio (wav/ogg/mp3/flac)"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/remix": {
+      "post": {
+        "operationId": "remix",
+        "summary": "Remix in another style or context: keeps the melody, new tempo/instruments/harmony/groove.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "style": {
+                    "type": "string",
+                    "description": "target style"
+                  },
+                  "context": {
+                    "type": "string",
+                    "description": "or a game context"
+                  },
+                  "bpm": {
+                    "type": "number",
+                    "description": "tempo"
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "description": "seed (same args + seed = same result)",
+                    "default": 0
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "also save the song (.8bt/.8bms)"
+                  },
+                  "wav": {
+                    "type": "string",
+                    "description": "also render audio (wav/ogg/mp3/flac)"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/loopify": {
+      "post": {
+        "operationId": "loopify",
+        "summary": "Make a seamless loop: set the loop region, smooth the seam, optionally render a gapless file.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "bars": {
+                    "type": "integer",
+                    "description": "loop length (default: whole song)"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "also save the song (.8bt/.8bms)"
+                  },
+                  "wav": {
+                    "type": "string",
+                    "description": "render the gapless loop (wav/ogg)"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/soundpack": {
+      "post": {
+        "operationId": "soundpack",
+        "summary": "Render a retro SFX pack (WAV files + manifest.json + Howler-style sprite).",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "names": {
+                    "type": "string",
+                    "description": "comma list of sfx and/or sets (platformer, shooter, ui, rpg) or 'all'",
+                    "default": "all"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "output folder",
+                    "default": "sfx"
+                  },
+                  "variants": {
+                    "type": "integer",
+                    "description": "variants per sound (deterministic)",
+                    "default": 1
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "description": "seed (same args + seed = same result)",
+                    "default": 0
+                  },
+                  "sprite": {
+                    "type": "boolean",
+                    "description": "also write sprite.wav + sprite.json",
+                    "default": true
+                  },
+                  "sr": {
+                    "type": "integer",
+                    "description": "sample rate",
+                    "default": 44100
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/stems": {
+      "post": {
+        "operationId": "stems",
+        "summary": "Render one WAV per track (plus mix.wav) into a folder.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "folder",
+                    "default": "stems"
+                  },
+                  "seamless": {
+                    "type": "boolean",
+                    "description": "loop region, tails folded (gapless)",
+                    "default": false
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/master": {
+      "post": {
+        "operationId": "master",
+        "summary": "Master to a loudness target: gain to RMS target, soft limiter, fades; renders a file.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song (file/@handle/demo) or an existing .wav"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "output file",
+                    "default": "master.wav"
+                  },
+                  "target_db": {
+                    "type": "number",
+                    "description": "target RMS dBFS (~LUFS for chiptune)",
+                    "default": -14.0
+                  },
+                  "ceiling_db": {
+                    "type": "number",
+                    "description": "peak ceiling dBFS",
+                    "default": -1.0
+                  },
+                  "fade_in": {
+                    "type": "number",
+                    "description": "seconds",
+                    "default": 0.0
+                  },
+                  "fade_out": {
+                    "type": "number",
+                    "description": "seconds",
+                    "default": 0.0
+                  },
+                  "loop": {
+                    "type": "boolean",
+                    "description": "seamless loop render (no fades)",
+                    "default": false
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/describe": {
+      "post": {
+        "operationId": "describe",
+        "summary": "Describe a song in one paragraph plus key facts (form, chords, range, mood, score).",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/critique": {
+      "post": {
+        "operationId": "critique",
+        "summary": "Score a song 0-100 with metrics and concrete tips (also used to rerank compose).",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/diff": {
+      "post": {
+        "operationId": "diff",
+        "summary": "Structural diff of two songs: settings, tracks, notes added/removed, arrangement.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "a": {
+                    "type": "string",
+                    "description": "first song"
+                  },
+                  "b": {
+                    "type": "string",
+                    "description": "second song"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "a",
+                  "b"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/suggest": {
+      "post": {
+        "operationId": "suggest",
+        "summary": "ML suggestions: next notes for a pattern, chords per bar, or a groove.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "kind": {
+                    "type": "string",
+                    "description": "next | chords | groove",
+                    "default": "next"
+                  },
+                  "track": {
+                    "type": "string",
+                    "description": "track name or index (default: lead)"
+                  },
+                  "pattern": {
+                    "type": "string",
+                    "description": "pattern name"
+                  },
+                  "k": {
+                    "type": "integer",
+                    "description": "how many",
+                    "default": 3
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "description": "seed (same args + seed = same result)",
+                    "default": 0
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/humanize": {
+      "post": {
+        "operationId": "humanize",
+        "summary": "Humanize timing and velocity (deterministic per seed).",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "src": {
+                    "type": "string",
+                    "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+                  },
+                  "amount": {
+                    "type": "number",
+                    "description": "0..1",
+                    "default": 0.3
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "description": "seed (same args + seed = same result)",
+                    "default": 0
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "also save the song (.8bt/.8bms)"
+                  },
+                  "wav": {
+                    "type": "string",
+                    "description": "also render audio (wav/ogg/mp3/flac)"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "src"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/intent": {
+      "post": {
+        "operationId": "intent",
+        "summary": "Parse plain English into an op call {op, args, confidence} (no side effects).",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "request in plain English"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/library": {
+      "post": {
+        "operationId": "library",
+        "summary": "List the style/preset library: styles, game contexts, grooves, presets, SFX and SFX sets.",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "what": {
+                    "type": "string",
+                    "description": "all | styles | contexts | grooves | presets | sfx",
+                    "default": "all"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    },
+    "/ops/ml": {
+      "post": {
+        "operationId": "ml",
+        "summary": "Tiny ML model: info | train | bench (sizes, provenance, latency).",
+        "tags": [
+          "core"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "description": "info | train | bench",
+                    "default": "info"
+                  },
+                  "out": {
+                    "type": "string",
+                    "description": "train: where to write the model JSON"
+                  },
+                  "_fields": {
+                    "type": "string",
+                    "description": "optional: comma-separated result keys to keep (saves tokens)"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "result object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "{error}"
+          }
+        }
+      }
+    }
+  }
+}

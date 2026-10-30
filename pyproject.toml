@@ -1,22 +1,53 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "eightbit-music-code-studio"
 version = "1.0.0"
-description = "8Bit Music Code Studio: chiptune GUI studio + CLI + ACP/MCP agent, exports audio and code"
+description = "8Bit Music Code Studio: chiptune GUI + terminal studio + CLI/HTTP/MCP/ACP agent tools; exports audio and code"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.22"]
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "RechargedIdeas" }]
+keywords = ["chiptune", "8bit", "music", "synthesizer", "game-audio", "mcp", "agents", "tkinter"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Topic :: Multimedia :: Sound/Audio :: Sound Synthesis",
+  "Environment :: Console",
+  "Environment :: X11 Applications",
+]
+dependencies = [
+  "numpy>=1.22",
+  "pyreadline3>=3.4; sys_platform == 'win32'",
+]
 
 [project.optional-dependencies]
 audio = ["sounddevice>=0.4"]
 midi = ["mido>=1.3", "python-rtmidi>=1.5"]
-dev = ["pytest>=7", "pillow"]
+# MCP / ACP / ML need nothing extra (stdlib JSON-RPC + a tiny numpy/stdlib model);
+# the extras exist so install commands stay stable if that ever changes.
+mcp = []
+acp = []
+ml = []
+all = ["sounddevice>=0.4", "mido>=1.3", "python-rtmidi>=1.5"]
+dev = ["pytest>=7", "pillow", "build", "twine"]
 
 [project.scripts]
 8bms = "eightbit_studio:main"
+
+[project.urls]
+Homepage = "https://github.com/RechargedIdeas/8bit-music-code-studio"
+Documentation = "https://github.com/RechargedIdeas/8bit-music-code-studio/tree/main/docs"
+Issues = "https://github.com/RechargedIdeas/8bit-music-code-studio/issues"
 
 [tool.setuptools]
 packages = ["eightbit_studio"]
