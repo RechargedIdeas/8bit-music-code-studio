@@ -6,6 +6,7 @@
 
 ## [1.1.1] - 2026-10-30
 ### Fixed
+- **Docs:** cache-free install one-liners through `api.github.com` (`Accept: application/vnd.github.raw`) for PowerShell and sh, in the README.
 - **Windows installer failing with "The system cannot find the path specified."** when a broken `pipx` (or `uv`) launcher was on PATH. The installers now run pipx and uv through the Python they found (`python -m pipx`), never through a launcher on PATH.
 ### Changed
 - Both installers install missing or broken dependencies themselves, user-level only:

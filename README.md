@@ -21,6 +21,8 @@ A chiptune studio in **one Python file**, `8BitMusicCodeStudio.py`. It has a Tki
 | Linux / macOS | `curl -fsSL https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.sh \| sh` |
 | Windows (PowerShell) | `irm https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.ps1 \| iex` |
 
+Current release: **1.1.1** — the installer bootstraps or repairs pipx / uv for you (see [CHANGELOG](CHANGELOG.md)).
+
 Just updated? `raw.githubusercontent.com` caches files for up to 5 minutes and ignores `?query` strings, so right after a release you may get the previous script. It notices that and switches to the current one itself, and every run prints `installer <version> (app commit <sha>)`. To skip the cache entirely, fetch through the GitHub API:
 ```powershell
 irm https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.ps1 -Headers @{Accept='application/vnd.github.raw'} | iex
