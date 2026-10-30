@@ -1,0 +1,27 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
+      - run: pip install numpy pytest pillow && pip install -e .
+      - run: pytest -q
+      - run: python scripts/build_all_plugins.py plugins --out dist/plugins
+      - run: xvfb-run -a -s "-screen 0 1440x960x24" python 8BitMusicCodeStudio.py gui --selftest --screenshot ci-shot.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugins-and-screenshot
+          path: |
+            dist/plugins/
+            ci-shot.png

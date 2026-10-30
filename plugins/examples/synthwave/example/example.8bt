@@ -1,0 +1,6 @@
+# Generate a synthwave song with this plugin installed:
+#   8bms gen --style synthwave --bars 16 --seed 7 -o night.8bt && 8bms render night.8bt -o night.wav
+title Synthwave stub
+bpm 104; key A minor
+track drums drum
+pat drums.A: kick=x...x...x...x... snare=....X.......X... hat=x.x.x.x.x.x.x.xx

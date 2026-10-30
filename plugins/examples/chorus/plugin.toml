@@ -1,0 +1,7 @@
+name = "chorus"
+version = "1.0.0"
+api_version = "^1.0"
+types = ["effect"]
+entry = "bms_chorus:register"
+permissions = []
+description = "Stereo chorus: two LFO-modulated delay lines, wide and shimmery"

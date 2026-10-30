@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eightbit-studio-plugin-synthwave"
+version = "1.0.0"
+description = "Synthwave - a style plugin for 8Bit Music Code Studio"
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+
+[project.entry-points."eightbit_studio.plugins"]
+synthwave = "bms_synthwave:register"
+
+[tool.setuptools]
+packages = ["bms_synthwave"]
+# NOTE: '8bms plugin build' also copies plugin.toml into the package.

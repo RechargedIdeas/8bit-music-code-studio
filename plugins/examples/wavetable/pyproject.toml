@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eightbit-studio-plugin-wavetable"
+version = "1.0.0"
+description = "Wavetable - a instrument plugin for 8Bit Music Code Studio"
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+
+[project.entry-points."eightbit_studio.plugins"]
+wavetable = "bms_wavetable:register"
+
+[tool.setuptools]
+packages = ["bms_wavetable"]
+# NOTE: '8bms plugin build' also copies plugin.toml into the package.

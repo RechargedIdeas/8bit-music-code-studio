@@ -1,0 +1,7 @@
+name = "wavetable"
+version = "1.0.0"
+api_version = "^1.0"
+types = ["instrument"]
+entry = "bms_wavetable:register"
+permissions = []
+description = "Morphing 32-step 4-bit wavetable oscillator (Game Boy / Namco style) + 3 presets"

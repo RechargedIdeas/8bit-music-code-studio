@@ -1,0 +1,6 @@
+# example song for the chorus plugin
+title Chorus demo
+bpm 120; key C major
+fx chorus rate=0.7 depth=5 mix=0.45
+track lead inst=flute
+pat lead.A: o5 l8 c e g e d f a f | e g b g c/2

@@ -1,0 +1,7 @@
+name = "mml"
+version = "1.0.0"
+api_version = "^1.0"
+types = ["exporter"]
+entry = "bms_mml:register"
+permissions = []
+description = "Exports songs as MML (Music Macro Language) text, one channel per track"

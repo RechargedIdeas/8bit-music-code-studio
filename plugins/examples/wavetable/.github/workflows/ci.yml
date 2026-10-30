@@ -1,0 +1,21 @@
+name: plugin-ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install 8Bit Music Code Studio
+        env:
+          EIGHTBMS_SOURCE: ${{ vars.EIGHTBMS_SOURCE || 'git+https://github.com/RechargedIdeas/8bit-music-code-studio' }}
+        run: pip install numpy pytest "$EIGHTBMS_SOURCE"
+      - run: 8bms plugin validate .
+      - run: 8bms plugin test .
+      - run: 8bms plugin build . && 8bms plugin package .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

@@ -1,0 +1,9 @@
+# example song for the wavetable plugin
+title Wavetable demo
+bpm 104; key A minor
+track glass inst=wt_glass pan=-.2
+pat glass.A: o5 l8 a > c e < a g b > d < g f a > c < f e g# b/4
+track organ inst=wt_organ vol=.5
+pat organ.A: o3 l2 [a c5 e5] [g b d5] [f a c5] [e g# b]
+track growl inst=wt_growl vol=.6
+pat growl.A: o2 l4 a a g g f f e e

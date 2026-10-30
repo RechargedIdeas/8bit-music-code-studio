@@ -1,0 +1,7 @@
+name = "synthwave"
+version = "1.0.0"
+api_version = "^1.0"
+types = ["style"]
+entry = "bms_synthwave:register"
+permissions = []
+description = "Synthwave generator style: minor key, driving octave bass, gated snare groove"

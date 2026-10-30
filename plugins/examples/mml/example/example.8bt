@@ -1,0 +1,7 @@
+# export this as MML:  8bms export example/example.8bt --to mml -o tune.mml
+title MML demo
+bpm 140; key G major
+track lead inst=lead
+pat lead.A: o5 l8 g b > d < b a > c e < a | g/2 d/4 g/4
+track bass inst=bass
+pat bass.A: o3 l4 g d e c

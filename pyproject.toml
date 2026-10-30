@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eightbit-music-code-studio"
+version = "1.0.0"
+description = "8Bit Music Code Studio: chiptune GUI studio + CLI + ACP/MCP agent, exports audio and code"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.22"]
+
+[project.optional-dependencies]
+audio = ["sounddevice>=0.4"]
+midi = ["mido>=1.3", "python-rtmidi>=1.5"]
+dev = ["pytest>=7", "pillow"]
+
+[project.scripts]
+8bms = "eightbit_studio:main"
+
+[tool.setuptools]
+packages = ["eightbit_studio"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
