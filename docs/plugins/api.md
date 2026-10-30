@@ -1,5 +1,7 @@
 # PluginAPI reference
 
+> **TL;DR** `register(api)` gets a `PluginAPI`. Call its `add_*` methods (instrument, wave, effect, style, groove, op, exporter, importer, GUI panel, command, visualizer, MIDI mapping, ML backend). Every registration is tracked so it can be unloaded.
+
 `register(api)` receives a `PluginAPI`:
 
 | member | purpose |

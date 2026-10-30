@@ -1,5 +1,7 @@
 # Plugin types
 
+> **TL;DR** One section per plugin type, each with the snippet its `8bms plugin new <type> <name>` template generates.
+
 Each type has a template: `8bms plugin new <type> <name>`. The snippets below are what the templates generate (shortened).
 
 ## instrument

@@ -1,5 +1,7 @@
 # plugin.toml
 
+> **TL;DR** `plugin.toml` declares name, semver version, `api_version`, entry module, types and permissions. `8bms plugin validate` checks it against `schemas/plugin.schema.json`.
+
 ```toml
 name = "my-fx"                  # ^[a-z][a-z0-9_-]{1,40}$, unique
 version = "1.2.0"               # semver MAJOR.MINOR.PATCH[-pre][+build]

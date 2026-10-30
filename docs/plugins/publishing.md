@@ -1,5 +1,7 @@
 # Testing, building, publishing
 
+> **TL;DR** Run `validate`, then `test` (sandboxed), then `build` (wheel) and `package` (zip). Share the zip, a git URL, or a PyPI package that uses the `eightbit_studio.plugins` entry point.
+
 ```sh
 8bms plugin validate <dir>   # schema + api_version + import + dry-run register + declared types
 8bms plugin test <dir>       # pytest in a sandbox: temp EIGHTBMS_HOME, other plugins off, network blocked*

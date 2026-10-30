@@ -1,5 +1,7 @@
 # 8bms plugins: overview
 
+> **TL;DR** Plugins are folders (or pip packages) with a `plugin.toml` and a `register(api)` function. Scaffold with `8bms plugin new <type> <name>`, check with `8bms plugin validate`, then share it as a zip, a git URL or a PyPI package.
+
 A plugin is a folder (or an installed Python package) containing a `plugin.toml` manifest and a module with `register(api)`.
 `register` calls `api.add_*` methods; every registration is tracked so the plugin can be unloaded or disabled cleanly.
 
