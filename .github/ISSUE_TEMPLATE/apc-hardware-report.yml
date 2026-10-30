@@ -1,0 +1,57 @@
+name: APC hardware report
+description: Results of `8bms apc test` on a real Akai APC (passes are welcome too)
+title: "[APC] <model>: <pass / problem>"
+labels: ["hardware", "midi"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing! Run `8bms apc test --report apc-report.md` with the controller plugged in
+        (guide: docs/apc-hardware-testing.md), then fill this in. Reports that pass are useful too:
+        they let us mark a model as confirmed.
+  - type: dropdown
+    id: model
+    attributes:
+      label: Controller
+      options:
+        - APC mini (mk1)
+        - APC mini mk2
+        - APC Key 25 (mk1)
+        - APC Key 25 mk2
+        - APC40 mkII
+        - APC40 (original)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and how the controller is connected
+      placeholder: "Windows 11, USB directly / via hub; firmware version if known"
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Report
+      description: Paste the whole apc-report.md (it lists versions, ports and every step's result).
+      render: markdown
+    validations:
+      required: true
+  - type: dropdown
+    id: leds
+    attributes:
+      label: LED sweep
+      description: During the sweep, did every pad light once in each of 3 colours, row by row?
+      options:
+        - "Yes, all pads, all colours"
+        - "Some pads stayed dark"
+        - "Colours looked wrong"
+        - "No LEDs lit at all"
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Which pad/fader/button misbehaved, what you expected, photos if helpful.

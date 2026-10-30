@@ -95,8 +95,10 @@ globalThis.AudioContext = class { constructor(){ this.currentTime = 0; this.samp
   createPeriodicWave(){ return {}; } resume(){ return Promise.resolve(); } close(){ return Promise.resolve(); } };
 globalThis.OfflineAudioContext = class extends AudioContext { constructor(c, n, sr){ super(); this.length = n; } startRendering(){ return Promise.resolve({ length: this.length }); } };
 const m = await import(process.argv[2]);
-const buf = await m.renderOffline(44100);
+const buf = await m.renderOffline(44100);   // exact (pure-JS) render
 if (!(buf.length > m.SONG.seconds * 44100)) throw new Error('short render');
+const live = await m.renderOffline(44100, m.SONG, { mode: 'live' });   // Web Audio graph
+if (!(live.length > m.SONG.seconds * 44100)) throw new Error('short live render');
 if (!(m.STEP_EVENTS.length === m.SONG.events.length)) throw new Error('step events mismatch');
 console.log(started);
 """, encoding="utf-8")

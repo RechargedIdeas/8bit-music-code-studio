@@ -27,7 +27,7 @@ BEGIN, END = "<!-- BEGIN GENERATED: ops -->", "<!-- END GENERATED: ops -->"
 # The order docs appear in llms-full.txt (anything else in docs/ is appended alphabetically).
 DOC_ORDER = ["README.md", "getting-started.md", "agent-framework.md", "cli-reference.md", "score-format.md",
              "note-language.md", "gui-guide.md", "terminal-studio.md", "exporting.md", "python-api.md",
-             "http-api.md", "mcp.md", "acp.md", "midi-apc.md", "ml.md", "architecture.md", "faq.md", "glossary.md"]
+             "http-api.md", "mcp.md", "acp.md", "midi-apc.md", "apc-hardware-testing.md", "ml.md", "architecture.md", "faq.md", "glossary.md"]
 
 
 def _read(p: Path) -> str:

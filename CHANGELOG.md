@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-30
+### Added
+- **JS export parity:** the exported ES module now carries an exact renderer (`renderSamples`, `toWav`, `renderVoice`), a line-for-line port of the Python synth. Its output matches the app's render sample for sample, including **duty sweep** and **bitcrush**, and runs in Node/Deno/Bun as well as browsers.
+  - `createPlayer(ctx, {mode})`: `"exact"` plays the exact render (seamless when looping); `"live"` schedules Web Audio notes; `"auto"` (default) picks exact when bitcrush is on.
+  - Live mode plays duty-swept notes from exactly rendered buffers and applies bitcrush bit depth with a WaveShaper.
+  - `renderOffline()` uses the exact renderer by default (`{mode: "live"}` renders the Web Audio graph).
+  - New tests run the export in Node and compare it with the Python render (with and without bitcrush/duty sweep, seamless, WAV bytes, player modes).
+- **Akai APC:** `8bms apc test`, a guided hardware check (LED sweep, press-the-lit-pad, faders/knobs, master, Play, scenes, keys) that prints or saves a Markdown report; `--virtual <model>` runs it against a simulated controller; `8bms apc models` lists mappings.
+  - `VirtualApc`: an in-memory APC (MIDI backend + device model with LED state) that drives the real `MidiController`. Tests cover every pad, LED, fader, knob, scene and transport button of each model, and the GUI self-test drives pad → drum step → LED and fader → volume through it.
+  - Optional loopback test over real python-rtmidi virtual ports where the OS allows them.
+  - New mappings `apc-mini-mk2` and `apc-key25-mk2` (RGB LED palette, channel 6 brightness, mk2 scene/track button notes); APC Key 25 scene/track buttons.
+  - Docs page [Testing with real APC hardware](docs/apc-hardware-testing.md) and a GitHub issue form for hardware reports.
+### Changed
+- Port detection picks the longest matching name (so "APC mini mk2" is no longer treated as an mk1), and the LED output port is paired with the input even when the OS names them differently (e.g. Windows `APC MINI 0` / `APC MINI 1`).
+- `8bms gui --screenshot` now includes the menu bar; `screenshot.png` regenerated from the current UI.
+- Plugin docs now describe the `plugin test` network block accurately: best effort over Python sockets (now also `connect_ex`), not a security sandbox; installed plugins are not sandboxed.
+### Fixed
+- APC Key 25: keys played on the keyboard channel could be mistaken for pads, scene or transport buttons when they shared a note number.
+- APC mini mk2 / APC40 mkII LEDs used mk1 velocity colours (which show as dim grey on RGB pads).
+
 ## [1.0.0] - first release (not yet published)
 ### Added
 - **Studio:** Tk GUI (piano roll, keyboard, drum sequencer, patterns and arrangement, instruments, mixer, helpers, autosave), with a NumPy synth (pulse/triangle/noise/saw/sine/wavetable, ADSR, vibrato, arpeggio, slides, echo/low-pass/bitcrush).

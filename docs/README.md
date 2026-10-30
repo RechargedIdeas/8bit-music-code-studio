@@ -10,5 +10,5 @@
 | [score-format](score-format.md): `.8bt` text scores | [python-api](python-api.md) |
 | [note-language](note-language.md): `o5 l8 c e g` | [architecture](architecture.md) (mermaid diagram) |
 | [exporting](exporting.md): audio, loops, code | [ml](ml.md): tiny offline model, implemented vs design |
-| [midi-apc](midi-apc.md): Akai APC and MIDI | [plugins/](plugins/README.md): build and publish plugins |
+| [midi-apc](midi-apc.md): Akai APC and MIDI; [apc-hardware-testing](apc-hardware-testing.md): check a real APC | [plugins/](plugins/README.md): build and publish plugins |
 | [faq](faq.md) · [glossary](glossary.md) | [../AGENTS.md](../AGENTS.md) · [../llms.txt](../llms.txt) · [../schemas/](../schemas/) |

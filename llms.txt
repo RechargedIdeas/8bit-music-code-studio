@@ -12,6 +12,7 @@ Start here: run `8bms tools` (or `--json`), then `8bms <op> --help`. Install: `c
 - [Note language](docs/note-language.md): `o5 l8 c e g >c`, chords, repeats, ties
 - [MCP](docs/mcp.md), [ACP](docs/acp.md), [HTTP API](docs/http-api.md), [Python API](docs/python-api.md)
 - [Exporting](docs/exporting.md): WAV/OGG, seamless loops, stems, JS/Python/JSON code
+- [MIDI/APC](docs/midi-apc.md), [Testing with real APC hardware](docs/apc-hardware-testing.md): `8bms apc test`
 - [ML](docs/ml.md): the 43 KB offline model; implemented vs design-only
 - [Getting started](docs/getting-started.md), [FAQ](docs/faq.md), [Glossary](docs/glossary.md), [Architecture](docs/architecture.md)
 

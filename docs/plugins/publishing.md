@@ -9,7 +9,7 @@
 8bms plugin package <dir>    # dist/<name>-<ver>.zip (installable with `8bms plugin install x.zip`)
 python scripts/build_all_plugins.py [dirs…]   # validate+test+build+package all of plugins/**
 ```
-\* Network stays blocked unless the manifest grants `network`.
+\* Best effort: Python socket connections are blocked unless the manifest grants `network`. It catches accidental network use in tests; it is not a security sandbox (see [manifest.md](manifest.md#permissions)).
 
 Tests import the host as `import eightbit_studio as bms` and load the plugin with `bms.load_plugin_dir(<plugin root>)`. See any template's `tests/test_plugin.py`.
 

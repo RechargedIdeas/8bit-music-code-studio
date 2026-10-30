@@ -87,9 +87,10 @@ Press **F1** in the app for the full shortcut list. Tooltips are on every contro
 
 ### "Save as code"
 - **Python (`--py`):** a standalone script needing only NumPy. It re-synthesizes the song and writes a WAV (`python song.py -o out.wav [--seamless]`). Its output is sample-identical to the app's render (covered by tests).
-- **JavaScript (`--js`):** an ES module for the browser.
-  - It exports `SONG`, `createPlayer(ctx, {loop})`, `renderOffline(sampleRate)`, `playNote(...)`, `createMixer(...)`, plus `STEP_EVENTS`, `STEPS` and `STEP_SECONDS` for step-sequencer/game engines.
-  - Usage: `import {createPlayer} from './song.js'; createPlayer(new AudioContext()).start()`.
+- **JavaScript (`--js`):** a dependency-free ES module for the browser, Node, Deno or Bun.
+  - It exports `SONG`, `createPlayer(ctx, {loop, mode})`, `renderOffline(sampleRate)`, `renderSamples(sampleRate)`, `toWav(...)`, `playNote(...)`, `createMixer(...)`, plus `STEP_EVENTS`, `STEPS` and `STEP_SECONDS` for step-sequencer/game engines.
+  - Its exact renderer is a port of the Python synth (duty sweep and bitcrush included) and matches the app's render sample for sample (covered by tests that run it in Node).
+  - Usage: `import {createPlayer} from './song.js'; createPlayer(new AudioContext()).start()`. In Node: `fs.writeFileSync('song.wav', toWav(renderSamples()))`.
 - **JSON (`--json`):** the fully resolved event list plus instruments.
 - **`.8bt` (`--score`):** a compact, human/AI-editable text score that round-trips with the project.
 
@@ -99,7 +100,7 @@ Guides:
 - [.8bt score format](docs/score-format.md)
 - [Note language](docs/note-language.md)
 - [Exporting](docs/exporting.md)
-- [MIDI/APC](docs/midi-apc.md)
+- [MIDI/APC](docs/midi-apc.md) and [testing with real APC hardware](docs/apc-hardware-testing.md)
 
 ### `.8bt` score example
 ```
@@ -115,7 +116,7 @@ pat drums A: kick=x...x...x...x... snare=....x.......x... hat=x.x.x.x.x.x.x.x.
 ```
 
 ## Akai APC / MIDI controllers (optional)
-Install `mido` and `python-rtmidi` (`pip install -e ".[midi]"`). The GUI's **MIDI** menu connects to a port; `8bms midi` lists ports and monitors one.
+Install `mido` and `python-rtmidi` (`pip install -e ".[midi]"`). The GUI's **MIDI** menu connects to a port; `8bms midi` lists ports and monitors one. Own an APC? `8bms apc test --report apc-report.md` checks it; see [Testing with real APC hardware](docs/apc-hardware-testing.md).
 
 Built-in mappings:
 - **APC mini / mk2:** the 8×8 pads edit drum steps (with LED feedback and a playhead), faders set track volumes, fader 9 sets master, and the scene buttons select patterns.
@@ -203,10 +204,10 @@ CI runs the tests on Ubuntu, macOS and Windows with Python 3.10–3.13, smoke-te
 More: [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md), [architecture](docs/architecture.md).
 
 ## Limitations
-- The JS export approximates the synth with Web Audio oscillators. It ignores duty sweep and bitcrush, and plugin waves/effects aren't embedded in code exports (the Python export falls back to built-ins).
+- The JS player's *live* mode uses band-limited Web Audio oscillators, so it is close to the app but not sample-identical; *exact* mode (the default when bitcrush is on, and for `renderOffline`) matches. Plugin waves/effects aren't embedded in code exports (built-ins are used instead).
 - Without `sounddevice`, the playhead is estimated and loop playback restarts a rendered buffer.
-- APC mappings follow Akai's published note/CC maps but haven't been tested on real hardware here.
-- The plugin "filesystem" permission is advisory. Only network is enforced, and only in `plugin test`; plugins run in-process with full Python rights, so install only plugins you trust.
+- APC mappings follow Akai's published note/CC maps and are tested end to end against a simulated controller, but not yet on real hardware. If you own one, `8bms apc test` produces a report ([how](docs/apc-hardware-testing.md)). The original APC40 (mk1) isn't supported.
+- Plugin permissions other than `network` are advisory, and `network` is only blocked (best effort, Python sockets) while `8bms plugin test` runs. Installed plugins run in-process with full Python rights, so install only plugins you trust.
 - `.8bt` velocities are stored as 7-bit MIDI values or 3-decimal numbers.
 
 ## License

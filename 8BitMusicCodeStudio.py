@@ -62,7 +62,7 @@ if __name__ == "__main__":  # run as a plain script: let plugins `import eightbi
     sys.modules.setdefault("eightbit_studio", sys.modules[__name__])
 
 APP_NAME = "8Bit Music Code Studio"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 API_VERSION = "1.0.0"          # plugin API (semver)
 SR = 44100                      # sample rate
 PPQ = 96                        # ticks per quarter note (divisible by 3 for triplets)
@@ -1774,11 +1774,132 @@ function _noiseBuffer(ctx, short) {
 }
 const midiHz = (m) => 440 * Math.pow(2, (m - 69) / 12);
 
+// ---- exact offline synth: a line-for-line port of the Python renderer -------
+// Same LFSR, 4-bit steps, ADSR, duty sweep, echo, low-pass and bitcrush as the
+// studio, so renderSamples() matches the Python/WAV render sample for sample
+// (within float rounding). Works anywhere: browser, Node, Deno, Bun.
+const _rhe = (x) => { const r = Math.round(x); return (r - x === 0.5 && r % 2 !== 0) ? r - 1 : r; }; // numpy round-half-even
+const _clip = (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x);
+const _lfsrCache = new Map();
+function _lfsr(short) {
+  if (_lfsrCache.has(short)) return _lfsrCache.get(short);
+  let reg = 1; const tap = short ? 6 : 1, period = short ? 93 : 32767, out = new Float64Array(period);
+  for (let i = 0; i < period; i++) { const bit = (reg ^ (reg >> tap)) & 1; reg = (reg >> 1) | (bit << 14); out[i] = (reg & 1) ? 1 : -1; }
+  _lfsrCache.set(short, out); return out;
+}
+/** Render one note (mono Float64Array, incl. release tail), exactly like the Python render_voice. */
+export function renderVoice(inst, midi, dur, vel, sr = 44100) {
+  const nGate = Math.max(Math.trunc(dur * sr), 1), rel = inst.release ?? 0.05, n = nGate + Math.trunc(rel * sr);
+  if (inst.fixed_note !== undefined && inst.fixed_note !== null) midi = inst.fixed_note;
+  const vd = inst.vib_depth || 0, vDelay = inst.vib_delay ?? 0, vRate = inst.vib_rate ?? 5.5;
+  const arp = inst.arp || [], arpSpeed = inst.arp_speed ?? 30, sl = inst.slide || 0, slT = Math.max(inst.slide_time ?? 0.1, 1e-4);
+  const wave = inst.wave || 'pulse', duty0 = inst.duty ?? 0.5, sweep = inst.duty_sweep ?? 0, base = midi + (inst.transpose || 0) - 69;
+  const tab = (inst.table && inst.table.length) ? inst.table : new Array(32).fill(8);
+  const noise = wave === 'noise' ? _lfsr(inst.noise_mode === 'short') : null, nRate = inst.noise_rate ?? 1;
+  const a = Math.max(Math.trunc((inst.attack ?? 0.005) * sr), 1), d = Math.max(Math.trunc((inst.decay ?? 0.1) * sr), 1), sus = inst.sustain ?? 0.7;
+  let relLvl = sus; { const g = Math.max(nGate - 1, 0); relLvl = g < a ? g / a : g < a + d ? 1 - (1 - sus) * (g - a) / d : sus; }
+  const r = Math.max(n - nGate, 1), amp = (inst.volume ?? 0.8) * vel, out = new Float64Array(n);
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    const t = i / sr;
+    let semis = 0;
+    if (vd) semis += vd * _clip((t - vDelay) * 10, 0, 1) * Math.sin(2 * Math.PI * vRate * t);
+    if (arp.length) semis += arp[Math.floor(t * arpSpeed) % arp.length];
+    if (sl) semis += sl * _clip(t / slT, 0, 1);
+    acc += 440 * Math.pow(2, (base + semis) / 12);
+    const phase = acc / sr, frac = phase - Math.floor(phase);
+    let s;
+    if (wave === 'triangle') s = _rhe((1 - 4 * Math.abs(frac - 0.5) + 1) * 7.5) / 7.5 - 1;
+    else if (wave === 'saw') s = _rhe(frac * 15) / 7.5 - 1;
+    else if (wave === 'sine') s = Math.sin(2 * Math.PI * frac);
+    else if (wave === 'wave') s = tab[Math.floor(frac * tab.length) % tab.length] / 7.5 - 1;
+    else if (wave === 'noise') s = noise[Math.floor(phase * 8 * nRate) % noise.length];
+    else s = frac < _clip(duty0 + sweep * t, 0.05, 0.95) ? 1 : -1;     // pulse with duty sweep
+    let env = i < a ? i / a : (i < a + d ? 1 - (1 - sus) * (i - a) / d : sus);
+    if (n > nGate && i >= nGate) env = Math.max(relLvl * (1 - (i - nGate) / r), 0);
+    out[i] = s * env * amp;
+  }
+  return out;
+}
+function _fxEcho(ch, sr, p) {
+  const d = Math.max(Math.trunc((p.time ?? 0.3) * sr), 1), fb = p.feedback ?? 0.35;
+  return ch.map((x) => { const y = Float64Array.from(x); let g = p.mix ?? 0.25, k = 1; while (g > 0.004 && d * k < x.length) { const o = d * k; for (let i = o; i < x.length; i++) y[i] += g * x[i - o]; g *= fb; k++; } return y; });
+}
+function _fxLowpass(ch, sr, p) {
+  const fc = Math.min(Math.max(p.cutoff ?? 6000, 50), sr * 0.45) / sr, T = 63, h = new Float64Array(T); let sum = 0;
+  for (let k = 0; k < T; k++) { const m = k - (T - 1) / 2, x = 2 * fc * m, sinc = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x); h[k] = sinc * (0.54 - 0.46 * Math.cos(2 * Math.PI * k / (T - 1))); sum += h[k]; }
+  for (let k = 0; k < T; k++) h[k] /= sum;
+  const H = (T - 1) / 2;
+  return ch.map((x) => { const N = x.length, y = new Float64Array(N); for (let i = 0; i < N; i++) { let s = 0; const k0 = Math.max(0, i + H - N + 1), k1 = Math.min(T - 1, i + H); for (let k = k0; k <= k1; k++) s += h[k] * x[i + H - k]; y[i] = s; } return y; });
+}
+function _fxBitcrush(ch, sr, p) {
+  const ds = Math.max(Math.trunc(p.downsample ?? 2), 1), levels = Math.pow(2, Math.max(Math.trunc(p.bits ?? 6), 1)) / 2;
+  return ch.map((x) => { const y = new Float64Array(x.length); for (let i = 0; i < x.length; i++) y[i] = _rhe(x[ds > 1 ? i - (i % ds) : i] * levels) / levels; return y; });
+}
+export const EFFECTS = { echo: _fxEcho, lowpass: _fxLowpass, bitcrush: _fxBitcrush };
+/**
+ * renderSamples(sampleRate, {seamless, song}) -> {left, right, sampleRate, length}
+ * Pure-JS offline render (no Web Audio needed) that matches the studio's own WAV render,
+ * including duty sweep and bitcrush. seamless folds the tail onto the start for gapless loops.
+ */
+export function renderSamples(sampleRate = 44100, opts = {}) {
+  const song = opts.song || SONG, sr = sampleRate, seamless = !!opts.seamless;
+  const nExact = _rhe(song.seconds * sr), n = nExact + Math.trunc((seamless ? 2.0 : 1.5) * sr);
+  const bufs = song.tracks.map(() => new Float64Array(n));
+  for (const ev of song.events) {
+    const inst = song.instruments[ev.inst] || song.instruments.lead || {};
+    const s0 = _rhe(ev.t * sr); if (s0 >= n) continue;
+    const v = renderVoice(inst, ev.midi, ev.dur, ev.vel, sr), b = bufs[ev.track], m = Math.min(v.length, n - s0);
+    for (let i = 0; i < m; i++) b[s0 + i] += v[i];
+  }
+  const solo = song.tracks.some((t) => t.solo);
+  let L = new Float64Array(n), R = new Float64Array(n);
+  song.tracks.forEach((t, ti) => {
+    const audible = !t.mute && (t.solo || !solo), g = (t.volume ?? 0.8) * (audible ? 1 : 0), p = ((t.pan ?? 0) + 1) * Math.PI / 4;
+    const cl = Math.cos(p), cr = Math.sin(p), b = bufs[ti];
+    for (let i = 0; i < n; i++) { const x = b[i] * g; L[i] += x * cl * Math.SQRT2 * 0.5; R[i] += x * cr * Math.SQRT2 * 0.5; }
+  });
+  let ch = [L, R];
+  for (const fx of song.effects || []) if (fx.enabled !== false && EFFECTS[fx.type]) ch = EFFECTS[fx.type](ch, sr, fx.params || {});
+  [L, R] = ch;
+  let peak = 0;
+  for (let i = 0; i < n; i++) { L[i] *= song.master; R[i] *= song.master; peak = Math.max(peak, Math.abs(L[i]), Math.abs(R[i])); }
+  if (peak > 0.99) { const k = 0.99 / peak; for (let i = 0; i < n; i++) { L[i] *= k; R[i] *= k; } }
+  if (seamless) {
+    const bl = L.slice(0, nExact), br = R.slice(0, nExact);
+    for (let k = nExact; k < n && nExact > 0; k += nExact) for (let i = 0; i < nExact && k + i < n; i++) { bl[i] += L[k + i]; br[i] += R[k + i]; }
+    L = bl; R = br;
+  }
+  return { left: L, right: R, sampleRate: sr, length: L.length };
+}
+/** 16-bit stereo WAV bytes (Uint8Array) from renderSamples() output, e.g. for Node: fs.writeFileSync('song.wav', toWav(renderSamples())). */
+export function toWav(r) {
+  const n = r.length, buf = new ArrayBuffer(44 + n * 4), v = new DataView(buf), w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 4, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, r.sampleRate, true); v.setUint32(28, r.sampleRate * 4, true); v.setUint16(32, 4, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 4, true);
+  for (let i = 0; i < n; i++) { v.setInt16(44 + i * 4, Math.trunc(_clip(r.left[i], -1, 1) * 32767), true); v.setInt16(46 + i * 4, Math.trunc(_clip(r.right[i], -1, 1) * 32767), true); }
+  return new Uint8Array(buf);
+}
+/** True when the song uses features the live Web Audio graph can only approximate (bitcrush downsampling). */
+export function needsExactRender(song = SONG) { return (song.effects || []).some((f) => f.type === 'bitcrush' && f.enabled !== false); }
+function _toAudioBuffer(ctx, r) {
+  const b = ctx.createBuffer(2, Math.max(r.length, 1), r.sampleRate);
+  b.getChannelData(0).set(Float32Array.from(r.left)); b.getChannelData(1).set(Float32Array.from(r.right)); return b;
+}
+
+const _voiceCache = new Map();
 /** Schedule one note event at absolute AudioContext time `when`. */
 export function playNote(ctx, dest, inst, ev, when) {
   const midi = (inst.fixed_note ?? ev.midi) + (inst.transpose || 0);
   const hz = midiHz(midi), end = when + ev.dur, stop = end + (inst.release || 0.05) + 0.02;
   let src, pitchParam;
+  if (inst.duty_sweep && (!inst.wave || inst.wave === 'pulse')) {
+    // Duty sweep has no Web Audio node: play the exact rendered note (same samples as the studio).
+    const key = JSON.stringify([inst, ev.midi, ev.dur, ev.vel, ctx.sampleRate]);
+    let buf = _voiceCache.get(key);
+    if (!buf) { const v = renderVoice(inst, ev.midi, ev.dur, ev.vel, ctx.sampleRate); buf = ctx.createBuffer(1, v.length, ctx.sampleRate); buf.getChannelData(0).set(Float32Array.from(v, (x) => x * 0.5)); if (_voiceCache.size > 256) _voiceCache.clear(); _voiceCache.set(key, buf); }
+    src = ctx.createBufferSource(); src.buffer = buf; src.connect(dest); src.start(when); return src;
+  }
   if (inst.wave === 'noise') {
     src = ctx.createBufferSource(); src.buffer = _noiseBuffer(ctx, inst.noise_mode === 'short'); src.loop = true;
     src.playbackRate.value = (hz * 8 * (inst.noise_rate || 1)) / ctx.sampleRate * 8; pitchParam = src.detune;
@@ -1802,12 +1923,18 @@ export function playNote(ctx, dest, inst, ev, when) {
   return src;
 }
 
-/** Build the mixer graph (per-track gain + pan, echo, low-pass) into `destination`. */
+/** Build the live mixer graph (per-track gain + pan, echo, low-pass, bit-depth crush) into `destination`. */
 export function createMixer(ctx, destination = ctx.destination, song = SONG) {
   const master = ctx.createGain(); master.gain.value = song.master;
   let out = master;
   const lp = song.effects.find((f) => f.type === 'lowpass');
   if (lp) { const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = lp.params.cutoff || 6000; master.connect(f); out = f; }
+  const bc = song.effects.find((f) => f.type === 'bitcrush' && f.enabled !== false);
+  if (bc && ctx.createWaveShaper) {   // live path: bit-depth quantizer (sample-rate reduction needs the exact render)
+    const ws = ctx.createWaveShaper(), N = 4097, c = new Float32Array(N), lv = Math.pow(2, Math.max(Math.trunc(bc.params.bits ?? 6), 1)) / 2;
+    for (let i = 0; i < N; i++) c[i] = _rhe((i / (N - 1) * 2 - 1) * lv) / lv;
+    ws.curve = c; out.connect(ws); out = ws;
+  }
   out.connect(destination);
   const echo = song.effects.find((f) => f.type === 'echo');
   const bus = ctx.createGain(); bus.connect(master);
@@ -1818,11 +1945,23 @@ export function createMixer(ctx, destination = ctx.destination, song = SONG) {
 }
 
 /**
- * createPlayer(ctx, {destination, loop}) -> {start(), stop(), playing, position()}
- * Look-ahead scheduler; loops the whole song (seamless) when loop is true.
+ * createPlayer(ctx, {destination, loop, mode}) -> {start(), stop(), playing, position(), mode}
+ * mode 'live' = look-ahead note scheduler; 'exact' = plays renderSamples() (identical to the
+ * studio render, seamless when looping); 'auto' (default) picks 'exact' when the song uses bitcrush.
  */
 export function createPlayer(ctx, opts = {}) {
   const song = opts.song || SONG, loop = opts.loop ?? true, ahead = 0.15;
+  const mode = (opts.mode && opts.mode !== 'auto') ? opts.mode : (needsExactRender(song) ? 'exact' : 'live');
+  if (mode === 'exact') {
+    let src = null, t0 = 0, buf = null;
+    const ex = {
+      playing: false, mode,
+      start() { if (ex.playing) return; buf = buf || _toAudioBuffer(ctx, renderSamples(ctx.sampleRate, { song, seamless: loop })); src = ctx.createBufferSource(); src.buffer = buf; src.loop = loop; src.connect(opts.destination || ctx.destination); t0 = ctx.currentTime + 0.05; src.start(t0); ex.playing = true; if (!loop) src.onended = () => { ex.playing = false; }; },
+      stop() { ex.playing = false; if (src) { try { src.stop(); src.disconnect(); } catch (e) { /* ignore */ } } src = null; },
+      position() { return ex.playing ? (ctx.currentTime - t0) % song.seconds : 0; },
+    };
+    return ex;
+  }
   let timer = null, t0 = 0, idx = 0, cycle = 0, mixer = null;
   const tick = () => {
     const horizon = ctx.currentTime + ahead;
@@ -1835,7 +1974,7 @@ export function createPlayer(ctx, opts = {}) {
     }
   };
   const api = {
-    playing: false,
+    playing: false, mode,
     start() { if (api.playing) return; mixer = createMixer(ctx, opts.destination || ctx.destination, song); t0 = ctx.currentTime + 0.05; idx = 0; cycle = 0; api.playing = true; tick(); timer = setInterval(tick, 25); },
     stop() { api.playing = false; if (timer) clearInterval(timer); timer = null; if (mixer) { try { mixer.master.disconnect(); } catch (e) { /* ignore */ } } mixer = null; },
     position() { return api.playing ? (ctx.currentTime - t0) % song.seconds : 0; },
@@ -1843,9 +1982,13 @@ export function createPlayer(ctx, opts = {}) {
   return api;
 }
 
-/** Render to an AudioBuffer offline (browser OfflineAudioContext). */
-export async function renderOffline(sampleRate = 44100, song = SONG) {
+/**
+ * Render to an AudioBuffer offline. Default 'exact' uses renderSamples() (identical to the studio,
+ * incl. duty sweep + bitcrush); pass {mode: 'live'} to render the Web Audio graph instead.
+ */
+export async function renderOffline(sampleRate = 44100, song = SONG, opts = {}) {
   const ctx = new OfflineAudioContext(2, Math.ceil((song.seconds + 2) * sampleRate), sampleRate);
+  if ((opts.mode || 'exact') === 'exact') return _toAudioBuffer(ctx, renderSamples(sampleRate, { song, seamless: !!opts.seamless }));
   const mixer = createMixer(ctx, ctx.destination, song);
   for (const ev of song.events) playNote(ctx, mixer.tracks[ev.track], song.instruments[ev.inst] || song.instruments.lead, ev, ev.t);
   return ctx.startRendering();
@@ -1874,6 +2017,7 @@ def export_js(song: Song) -> str:
             "// ES module. Usage:\n"
             "//   import SONG, { createPlayer } from './song.js';\n"
             "//   const ctx = new AudioContext(); const p = createPlayer(ctx, { loop: true }); p.start();\n"
+            "//   Node/offline: import { renderSamples, toWav } from './song.js'; fs.writeFileSync('song.wav', toWav(renderSamples()));\n"
             f"export const SONG = {json.dumps(data, separators=(',', ':'))};\n"
             f"/** Events in 16th-note steps ({{voice, step, len, midi|drum, vel}}) for step sequencers. */\n"
             f"export const STEP_EVENTS = {json.dumps(lv, separators=(',', ':'))};\n"
@@ -4888,6 +5032,7 @@ if os.environ.get("EIGHTBMS_SANDBOX_NET") != "1":
     def _blocked(*a, **k):
         raise PermissionError("network is disabled in the 8bms plugin test sandbox")
     socket.socket.connect = _blocked
+    socket.socket.connect_ex = _blocked
     socket.create_connection = _blocked
 '''
 
@@ -5240,22 +5385,68 @@ class AudioOut:
 # ---------------------------------------------------------------------------
 # MIDI input + Akai APC controller support (optional: pip install mido python-rtmidi)
 # ---------------------------------------------------------------------------
+# Akai APC note/CC maps follow Akai's published protocol documents. Grid rows in
+# handler events and set_led() are counted from the TOP (row 0 = top row).
+_LED_MK1 = {"off": 0, "on": 1, "accent": 5, "playhead": 3}          # green / yellow / red (APC mini, APC Key 25)
+_LED_RGB = {"off": 0, "on": 21, "accent": 5, "playhead": 13}        # palette green / red / yellow (mk2 + APC40 mkII)
 MIDI_MAPPINGS.update({
-    # APC mini / APC mini mk2: 8x8 pads notes 0-63 (bottom-left = 0), faders CC 48-56
-    "apc-mini": {"match": ["APC MINI", "APC mini"], "grid": {"notes": list(range(64)), "rows": 8, "cols": 8, "origin": "bottom"},
+    # APC mini (mk1): 8x8 pads notes 0-63 (bottom-left = 0), faders CC 48-55, master CC 56
+    "apc-mini": {"model": "APC mini (mk1)", "match": ["APC MINI", "APC mini"],
+                 "grid": {"notes": list(range(64)), "rows": 8, "cols": 8, "origin": "bottom"},
                  "faders": {str(48 + i): i for i in range(8)}, "master_cc": 56,
                  "scene": list(range(82, 90)), "track_buttons": list(range(64, 72)), "shift": 98,
-                 "led": {"off": 0, "on": 1, "accent": 5, "playhead": 3}},
-    # APC Key 25: 5x8 pads notes 0-39 + 25-key keyboard on the same port/channel 1
-    "apc-key25": {"match": ["APC Key 25", "APC KEY 25"], "grid": {"notes": list(range(40)), "rows": 5, "cols": 8, "origin": "bottom"},
+                 "led": dict(_LED_MK1), "led_channel": 0},
+    # APC mini mk2: same pads/faders; RGB LEDs (velocity = palette colour, channel 6 = full brightness)
+    "apc-mini-mk2": {"model": "APC mini mk2", "match": ["APC mini mk2", "APC MINI MK2"],
+                     "grid": {"notes": list(range(64)), "rows": 8, "cols": 8, "origin": "bottom"},
+                     "faders": {str(48 + i): i for i in range(8)}, "master_cc": 56,
+                     "scene": list(range(112, 120)), "track_buttons": list(range(100, 108)), "shift": 122,
+                     "led": dict(_LED_RGB), "led_channel": 6},
+    # APC Key 25 (mk1): 5x8 pads notes 0-39 + 25 keys on channel 1 of the same port; knobs CC 48-55
+    "apc-key25": {"model": "APC Key 25 (mk1)", "match": ["APC Key 25", "APC KEY 25"],
+                  "grid": {"notes": list(range(40)), "rows": 5, "cols": 8, "origin": "bottom"},
                   "knobs": {str(48 + i): i for i in range(8)}, "keys_channel": 1, "transport": {"play": 91, "record": 93},
-                  "led": {"off": 0, "on": 1, "accent": 5, "playhead": 3}},
-    # APC40 mk2: clip grid 5x8 notes 32-39,24-31,...; track faders CC 7 on channels 0-7, master CC 14
-    "apc40": {"match": ["APC40"], "grid": {"notes": [32 + c - 8 * r for r in range(5) for c in range(8)], "rows": 5, "cols": 8, "origin": "top"},
+                  "scene": list(range(82, 87)), "track_buttons": list(range(64, 72)), "shift": 98,
+                  "led": dict(_LED_MK1), "led_channel": 0},
+    # APC Key 25 mk2: same layout, RGB pads
+    "apc-key25-mk2": {"model": "APC Key 25 mk2", "match": ["APC Key 25 mk2", "APC KEY 25 MK2"],
+                      "grid": {"notes": list(range(40)), "rows": 5, "cols": 8, "origin": "bottom"},
+                      "knobs": {str(48 + i): i for i in range(8)}, "keys_channel": 1, "transport": {"play": 91, "record": 93},
+                      "scene": list(range(82, 87)), "track_buttons": list(range(64, 72)), "shift": 98,
+                      "led": dict(_LED_RGB), "led_channel": 6},
+    # APC40 mkII: clip grid 5x8 notes 32-39 (top row) ... 0-7 (bottom); track faders CC 7 on channels 0-7, master CC 14
+    "apc40": {"model": "APC40 mkII", "match": ["APC40"],
+              "grid": {"notes": [32 + c - 8 * r for r in range(5) for c in range(8)], "rows": 5, "cols": 8, "origin": "top"},
               "fader_cc": 7, "master_cc": 14, "transport": {"play": 91, "stop": 92, "record": 93},
-              "led": {"off": 0, "on": 1, "accent": 5, "playhead": 3}},
-    "generic": {"match": [""], "keys_channel": None},
+              "scene": list(range(82, 87)),
+              "led": dict(_LED_RGB), "led_channel": 0},
+    "generic": {"model": "generic MIDI", "match": [""], "keys_channel": None},
 })
+APC_MODELS = ["apc-mini", "apc-mini-mk2", "apc-key25", "apc-key25-mk2", "apc40"]
+
+
+class MidiMsg:
+    """Minimal stand-in for mido.Message (used when mido is not installed and by VirtualApc)."""
+
+    def __init__(self, type: str, **kw):
+        self.type = type
+        self.channel = kw.pop("channel", 0)
+        self.__dict__.update(kw)
+
+    def dict(self) -> dict:
+        return dict(self.__dict__)
+
+    def __repr__(self):
+        return " ".join([self.type] + [f"{k}={v}" for k, v in self.__dict__.items() if k != "type"])
+
+
+def midi_message(type: str, **kw):
+    """A mido.Message when mido is installed, else a MidiMsg with the same attributes."""
+    try:
+        import mido  # type: ignore
+        return mido.Message(type, **kw)
+    except ImportError:
+        return MidiMsg(type, **kw)
 
 
 def midi_available() -> bool:
@@ -5275,25 +5466,233 @@ def midi_ports() -> List[str]:
 
 
 def mapping_for_port(port: str) -> Tuple[str, dict]:
+    """Best mapping for a port name (longest matching name wins, so 'APC mini mk2' beats 'APC mini')."""
+    best, blen = "generic", 0
     for name, m in MIDI_MAPPINGS.items():
-        if name != "generic" and any(s and s.lower() in port.lower() for s in m.get("match", [])):
-            return name, m
-    return "generic", MIDI_MAPPINGS["generic"]
+        if name == "generic":
+            continue
+        for s in m.get("match", []):
+            if s and s.lower() in port.lower() and len(s) > blen:
+                best, blen = name, len(s)
+    return best, MIDI_MAPPINGS[best]
+
+
+def grid_note(mapping: dict, row: int, col: int) -> Optional[int]:
+    """MIDI note of grid cell (row 0 = top), or None if off the grid."""
+    g = mapping.get("grid") or {}
+    if not g or not (0 <= row < g["rows"] and 0 <= col < g["cols"]):
+        return None
+    r = (g["rows"] - 1 - row) if g.get("origin") == "bottom" else row
+    return g["notes"][r * g["cols"] + col]
+
+
+def grid_cell(mapping: dict, note: int) -> Optional[Tuple[int, int]]:
+    g = mapping.get("grid") or {}
+    if not g or note not in g["notes"]:
+        return None
+    r, c = divmod(g["notes"].index(note), g["cols"])
+    return ((g["rows"] - 1 - r) if g.get("origin") == "bottom" else r), c
+
+
+def led_message(mapping: dict, row: int, col: int, state: str = "on") -> Optional[dict]:
+    """The LED feedback message for a grid pad: {type, channel, note, velocity} (None if off-grid)."""
+    note = grid_note(mapping, row, col)
+    if note is None:
+        return None
+    leds = mapping.get("led", {})
+    vel = leds.get(state, state if isinstance(state, int) else leds.get("on", 1))
+    return {"type": "note_on", "channel": int(mapping.get("led_channel", 0)), "note": note, "velocity": int(vel)}
+
+
+def _port_base(name: str) -> str:
+    """'APC MINI 0' / 'APC MINI:APC MINI MIDI 1 20:0' -> 'apc mini' (for pairing input and output ports)."""
+    s = name.split(":")[0]
+    s = re.sub(r"\s+\d+(:\d+)?$", "", s)
+    s = re.sub(r"^(MIDIIN|MIDIOUT)\d*\s*\((.*)\)$", r"\2", s, flags=re.I)
+    return s.strip().lower()
+
+
+def match_output_port(in_name: str, outputs: List[str]) -> Optional[str]:
+    """Find the LED/output port that belongs to an input port (names differ per OS)."""
+    if in_name in outputs:
+        return in_name
+    base = _port_base(in_name)
+    for o in outputs:
+        if _port_base(o) == base:
+            return o
+    mname, _ = mapping_for_port(in_name)
+    if mname != "generic":
+        same = [o for o in outputs if mapping_for_port(o)[0] == mname]
+        if len(same) == 1:
+            return same[0]
+    return None
+
+
+class MidoBackend:
+    """Real MIDI I/O through mido + python-rtmidi."""
+    name = "mido"
+
+    def __init__(self):
+        import mido  # type: ignore
+        self.mido = mido
+
+    def input_names(self) -> List[str]:
+        return list(self.mido.get_input_names())
+
+    def output_names(self) -> List[str]:
+        return list(self.mido.get_output_names())
+
+    def open_input(self, name: str, callback):
+        return self.mido.open_input(name, callback=callback)
+
+    def open_output(self, name: str):
+        return self.mido.open_output(name)
+
+    def message(self, type: str, **kw):
+        return self.mido.Message(type, **kw)
+
+
+class VirtualApc:
+    """An in-memory Akai APC: a fake MIDI backend plus a device model that keeps
+    LED state. Used by the tests, `8bms apc test --virtual` and anyone without
+    hardware. Press pads / move faders with the methods below; LED messages the
+    studio sends are decoded into `leds` (note -> (channel, velocity))."""
+    name = "virtual"
+    PORT_NAMES = {"apc-mini": "APC MINI", "apc-mini-mk2": "APC mini mk2 Control", "apc-key25": "APC Key 25",
+                  "apc-key25-mk2": "APC Key 25 mk2 Control", "apc40": "APC40 mkII"}
+
+    def __init__(self, model: str = "apc-mini"):
+        if model not in self.PORT_NAMES:
+            raise ValueError(f"unknown APC model {model!r}; have {', '.join(self.PORT_NAMES)}")
+        self.model, self.mapping = model, MIDI_MAPPINGS[model]
+        self.port_name = self.PORT_NAMES[model]
+        self.leds: Dict[int, Tuple[int, int]] = {}
+        self.sent: List[Any] = []          # messages the studio sent to the device
+        self.callback: Optional[Callable] = None
+        self.closed = False
+
+    # backend API --------------------------------------------------------------
+    def input_names(self) -> List[str]:
+        return [self.port_name]
+
+    def output_names(self) -> List[str]:
+        return [self.port_name]
+
+    def open_input(self, name: str, callback):
+        self.callback = callback
+        return self
+
+    def open_output(self, name: str):
+        return self
+
+    def message(self, type: str, **kw):
+        return MidiMsg(type, **kw)
+
+    def send(self, msg):                      # output port API
+        self.sent.append(msg)
+        if getattr(msg, "type", None) in ("note_on", "note_off"):
+            vel = getattr(msg, "velocity", 0) if msg.type == "note_on" else 0
+            if vel:
+                self.leds[msg.note] = (getattr(msg, "channel", 0), vel)
+            else:
+                self.leds.pop(msg.note, None)
+
+    def close(self):
+        self.closed = True
+
+    # device side --------------------------------------------------------------
+    def _emit(self, type: str, **kw):
+        if self.callback:
+            self.callback(MidiMsg(type, **kw))
+
+    def press(self, row: int, col: int, velocity: int = 127):
+        note = grid_note(self.mapping, row, col)
+        if note is None:
+            raise ValueError(f"no pad at row {row} col {col}")
+        self._emit("note_on", note=note, velocity=velocity, channel=0)
+        self._emit("note_off", note=note, velocity=0, channel=0)
+
+    def fader(self, index: int, value: float):
+        v = int(round(max(0.0, min(1.0, value)) * 127))
+        m = self.mapping
+        if m.get("faders"):
+            cc = next(int(k) for k, i in m["faders"].items() if i == index)
+            self._emit("control_change", control=cc, value=v, channel=0)
+        elif m.get("fader_cc") is not None:
+            self._emit("control_change", control=m["fader_cc"], value=v, channel=index)
+        elif m.get("knobs"):
+            cc = next(int(k) for k, i in m["knobs"].items() if i == index)
+            self._emit("control_change", control=cc, value=v, channel=0)
+        else:
+            raise ValueError("this model has no faders or knobs")
+
+    def master(self, value: float):
+        self._emit("control_change", control=self.mapping["master_cc"], value=int(round(value * 127)), channel=0)
+
+    def button(self, name: str):
+        n = self.mapping.get("transport", {})[name]
+        self._emit("note_on", note=n, velocity=127, channel=0)
+        self._emit("note_off", note=n, velocity=0, channel=0)
+
+    def scene(self, index: int):
+        n = self.mapping["scene"][index]
+        self._emit("note_on", note=n, velocity=127, channel=0)
+        self._emit("note_off", note=n, velocity=0, channel=0)
+
+    def key(self, note: int, velocity: int = 100):
+        ch = self.mapping.get("keys_channel")
+        self._emit("note_on", note=note, velocity=velocity, channel=0 if ch is None else ch)
+        self._emit("note_off", note=note, velocity=0, channel=0 if ch is None else ch)
+
+    def raw(self, type: str, **kw):
+        self._emit(type, **kw)
+
+    def led_state(self, row: int, col: int) -> str:
+        """'off' / 'on' / 'accent' / 'playhead' (or 'vel=N') for a pad, from the LED messages received."""
+        note = grid_note(self.mapping, row, col)
+        if note not in self.leds:
+            return "off"
+        ch, vel = self.leds[note]
+        if ch != self.mapping.get("led_channel", 0):
+            return f"ch{ch}:vel={vel}"
+        rev = {v: k for k, v in self.mapping.get("led", {}).items()}
+        return rev.get(vel, f"vel={vel}")
+
+    def lit(self) -> List[Tuple[int, int]]:
+        g = self.mapping["grid"]
+        return [(r, c) for r in range(g["rows"]) for c in range(g["cols"]) if self.led_state(r, c) != "off"]
 
 
 class MidiController:
     """Translates MIDI messages into studio actions via a mapping. The handler
     gets ('note_on', pitch, vel) / ('note_off', pitch) / ('grid', row, col) /
-    ('fader', track, value01) / ('master', value01) / ('transport', name) /
-    ('scene', index)."""
+    ('fader', track, value01) / ('knob', index, value01) / ('master', value01) /
+    ('transport', name) / ('scene', index). `backend` defaults to mido; pass a
+    VirtualApc to drive it without hardware."""
 
-    def __init__(self, handler: Callable[..., None], mapping: Optional[dict] = None):
+    def __init__(self, handler: Callable[..., None], mapping: Optional[dict] = None, backend=None):
         self.handler = handler
         self.mapping = mapping or MIDI_MAPPINGS["generic"]
+        self.mapping_name = next((k for k, v in MIDI_MAPPINGS.items() if v is self.mapping), "custom")
+        self.backend = backend
         self.port = None
         self.out = None
+        self.port_name = self.out_name = None
+        self.on_raw: Optional[Callable[[Any, bool], None]] = None   # (msg, handled) - diagnostics hook
+
+    def _dispatch(self, *ev):
+        self._handled = True
+        self.handler(*ev)
 
     def handle(self, msg) -> None:
+        self._handled = False
+        try:
+            self._handle(msg)
+        finally:
+            if self.on_raw:
+                self.on_raw(msg, self._handled)
+
+    def _handle(self, msg) -> None:
         m = self.mapping
         t = getattr(msg, "type", None)
         grid = m.get("grid", {})
@@ -5302,58 +5701,76 @@ class MidiController:
             note, vel = msg.note, getattr(msg, "velocity", 0)
             ch = getattr(msg, "channel", 0)
             keys_ch = m.get("keys_channel")
-            if notes and note in notes and (keys_ch is None or ch != keys_ch) and m is not MIDI_MAPPINGS["generic"]:
-                if t == "note_on" and vel > 0:
-                    i = notes.index(note)
-                    r, c = divmod(i, grid["cols"])
-                    row = (grid["rows"] - 1 - r) if grid.get("origin") == "bottom" else r
-                    self.handler("grid", row, c)
+            down = t == "note_on" and vel > 0
+            if keys_ch is not None and ch == keys_ch:          # keyboard half of an APC Key 25
+                self._dispatch("note_on", note, vel / 127) if down else self._dispatch("note_off", note)
+                return
+            if notes and note in notes and m is not MIDI_MAPPINGS["generic"]:
+                if down:
+                    self._dispatch("grid", *grid_cell(m, note))
+                else:
+                    self._handled = True                         # pad release: nothing to do
                 return
             for name, n in m.get("transport", {}).items():
-                if note == n and t == "note_on" and vel > 0:
-                    self.handler("transport", name)
+                if note == n:
+                    if down:
+                        self._dispatch("transport", name)
+                    else:
+                        self._handled = True
                     return
-            if note in m.get("scene", []) and t == "note_on" and vel > 0:
-                self.handler("scene", m["scene"].index(note))
+            if note in m.get("scene", []):
+                if down:
+                    self._dispatch("scene", m["scene"].index(note))
+                else:
+                    self._handled = True
                 return
-            if t == "note_on" and vel > 0:
-                self.handler("note_on", note, vel / 127)
-            else:
-                self.handler("note_off", note)
+            if m is not MIDI_MAPPINGS["generic"] and note in m.get("track_buttons", []) + [m.get("shift")]:
+                return                                           # known button, not used yet
+            self._dispatch("note_on", note, vel / 127) if down else self._dispatch("note_off", note)
         elif t == "control_change":
             cc, val = msg.control, msg.value / 127
             if str(cc) in m.get("faders", {}):
-                self.handler("fader", m["faders"][str(cc)], val)
+                self._dispatch("fader", m["faders"][str(cc)], val)
             elif m.get("fader_cc") is not None and cc == m["fader_cc"]:
-                self.handler("fader", getattr(msg, "channel", 0), val)
+                self._dispatch("fader", getattr(msg, "channel", 0), val)
             elif cc == m.get("master_cc"):
-                self.handler("master", val)
+                self._dispatch("master", val)
             elif str(cc) in m.get("knobs", {}):
-                self.handler("knob", m["knobs"][str(cc)], val)
+                self._dispatch("knob", m["knobs"][str(cc)], val)
 
-    def open(self, port_name: str) -> str:
-        import mido  # type: ignore
-        name, self.mapping = mapping_for_port(port_name)
-        self.port = mido.open_input(port_name, callback=self.handle)
+    def open(self, port_name: str, model: Optional[str] = None) -> str:
+        if self.backend is None:
+            self.backend = MidoBackend()
+        name, self.mapping = (model, MIDI_MAPPINGS[model]) if model else mapping_for_port(port_name)
+        self.mapping_name = name
+        self.port = self.backend.open_input(port_name, self.handle)
+        self.port_name = port_name
         try:
-            if port_name in mido.get_output_names():
-                self.out = mido.open_output(port_name)
+            self.out_name = match_output_port(port_name, self.backend.output_names())
+            self.out = self.backend.open_output(self.out_name) if self.out_name else None
         except Exception:
             self.out = None
         return name
 
-    def set_led(self, row: int, col: int, state: str = "on"):
-        """Light a grid pad (APC LED feedback)."""
+    def _send(self, d: dict):
         if self.out is None:
             return
-        import mido  # type: ignore
-        g = self.mapping.get("grid", {})
-        if not g:
-            return
-        r = (g["rows"] - 1 - row) if g.get("origin") == "bottom" else row
-        idx = r * g["cols"] + col
-        if 0 <= idx < len(g["notes"]):
-            self.out.send(mido.Message("note_on", note=g["notes"][idx], velocity=self.mapping.get("led", {}).get(state, 1)))
+        kw = {k: v for k, v in d.items() if k != "type"}
+        mk = getattr(self.backend, "message", None)
+        self.out.send(mk(d["type"], **kw) if mk else midi_message(d["type"], **kw))
+
+    def set_led(self, row: int, col: int, state: str = "on"):
+        """Light a grid pad (APC LED feedback). row 0 = top."""
+        d = led_message(self.mapping, row, col, state)
+        if d is not None:
+            self._send(d)
+
+    def clear_leds(self):
+        g = self.mapping.get("grid")
+        if g:
+            for r in range(g["rows"]):
+                for c in range(g["cols"]):
+                    self.set_led(r, c, "off")
 
     def close(self):
         for p in (self.port, self.out):
@@ -5362,6 +5779,223 @@ class MidiController:
                     p.close()
             except Exception:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# `8bms apc test`: hardware diagnostic (also runs against VirtualApc)
+# ---------------------------------------------------------------------------
+def _apc_steps(m: dict) -> List[dict]:
+    g = m.get("grid") or {}
+    steps = []
+    if g:
+        steps.append({"id": "pad_bottom_left", "prompt": "Press the LIT pad (it should be the bottom-left pad).",
+                      "light": (g["rows"] - 1, 0), "expect": ("grid", g["rows"] - 1, 0)})
+        steps.append({"id": "pad_top_right", "prompt": "Press the LIT pad (it should be the top-right pad).",
+                      "light": (0, g["cols"] - 1), "expect": ("grid", 0, g["cols"] - 1)})
+    if m.get("faders") or m.get("fader_cc") is not None:
+        steps.append({"id": "fader_1", "prompt": "Move fader 1 (leftmost track fader) all the way up and down.", "expect": ("fader", 0)})
+    elif m.get("knobs"):
+        steps.append({"id": "knob_1", "prompt": "Turn knob 1.", "expect": ("knob", 0)})
+    if m.get("master_cc") is not None:
+        steps.append({"id": "master", "prompt": "Move the master fader.", "expect": ("master",)})
+    if "play" in m.get("transport", {}):
+        steps.append({"id": "play", "prompt": "Press PLAY.", "expect": ("transport", "play")})
+    if m.get("scene"):
+        steps.append({"id": "scene_1", "prompt": "Press the first (top) scene-launch button.", "expect": ("scene", 0)})
+    if m.get("keys_channel") is not None:
+        steps.append({"id": "keys", "prompt": "Play any key on the keyboard.", "expect": ("note_on",)})
+    return steps
+
+
+def _virtual_actor(dev: VirtualApc, step: dict):
+    """What a (virtual) user does for each prompt: e.g. find the lit pad and press it."""
+    sid = step["id"]
+    if sid.startswith("pad_"):
+        lit = dev.lit()
+        if lit:
+            dev.press(*lit[0])
+    elif sid in ("fader_1", "knob_1"):
+        dev.fader(0, 1.0)
+        dev.fader(0, 0.0)
+    elif sid == "master":
+        dev.master(0.8)
+    elif sid == "play":
+        dev.button("play")
+    elif sid == "scene_1":
+        dev.scene(0)
+    elif sid == "keys":
+        dev.key(60)
+
+
+def _midi_env() -> dict:
+    import platform
+    env = {"os": f"{platform.system()} {platform.release()}", "python": platform.python_version(), "app": APP_VERSION}
+    try:
+        import mido  # type: ignore
+        try:
+            from importlib.metadata import version as _ver
+            env["mido"] = _ver("mido")
+        except Exception:
+            env["mido"] = getattr(mido, "__version__", "?")
+        try:
+            env["mido_backend"] = mido.backend.name
+        except Exception:
+            pass
+    except ImportError:
+        env["mido"] = None
+    try:
+        import rtmidi  # type: ignore
+        env["python-rtmidi"] = getattr(rtmidi, "__version__", "?")
+        try:
+            env["rtmidi_apis"] = [rtmidi.get_api_name(a) for a in rtmidi.get_compiled_api()]
+        except Exception:
+            pass
+    except ImportError:
+        env["python-rtmidi"] = None
+    return env
+
+
+def apc_test(port: Optional[str] = None, model: Optional[str] = None, virtual: Optional[str] = None,
+             timeout: float = 15.0, seconds: float = 0.0, led_delay: float = 0.02,
+             say: Callable[[str], None] = lambda s: None) -> dict:
+    """Guided APC check: LED feedback + pads, faders, transport. Returns a report dict.
+
+    virtual="apc-mini" etc. runs against an in-memory VirtualApc that answers the prompts."""
+    import queue
+    rep: Dict[str, Any] = {"env": _midi_env(), "virtual": bool(virtual), "steps": [], "messages": [], "unmapped": [],
+                           "hints": [], "status": "fail"}
+    if virtual:
+        dev = VirtualApc(virtual)
+        backend: Any = dev
+        rep["env"]["mido_backend"] = "virtual"
+    else:
+        dev = None
+        if rep["env"]["mido"] is None or rep["env"]["python-rtmidi"] is None:
+            rep["hints"].append('Install MIDI support: pip install "eightbit-music-code-studio[midi]" (or re-run the installer with --midi).')
+            rep["status"] = "no-midi"
+            return rep
+        backend = MidoBackend()
+    try:
+        ins, outs = backend.input_names(), backend.output_names()
+    except Exception as e:
+        rep["error"] = f"{type(e).__name__}: {e}"
+        rep["hints"].append("Could not open the MIDI system. Linux: `sudo modprobe snd-seq` (and add yourself to the `audio` group); "
+                            "macOS: open Audio MIDI Setup once; Windows: close other apps (Ableton, browser MIDI tabs) that hold the port.")
+        rep["status"] = "no-midi"
+        return rep
+    rep["inputs"], rep["outputs"] = ins, outs
+    if not port:
+        port = next((p for p in ins if mapping_for_port(p)[0] != "generic"), None)
+    if not port or port not in ins:
+        rep["hints"].append("No Akai APC input found. Check the USB cable/hub (APC40 needs its power supply), "
+                            "then run `8bms midi` to list ports and pass --port \"<name>\".")
+        rep["status"] = "no-device"
+        return rep
+    events: "queue.Queue[tuple]" = queue.Queue()
+    mc = MidiController(lambda *e: events.put(e), backend=backend)
+
+    def raw(msg, handled):
+        d = msg.dict() if hasattr(msg, "dict") else {"repr": repr(msg)}
+        d = {k: v for k, v in d.items() if k != "time"}
+        rep["messages"].append(d)
+        if not handled and d.get("type") in ("note_on", "control_change", "note_off"):
+            if not (d.get("type") == "note_off" or d.get("velocity", 1) == 0):
+                rep["unmapped"].append(d)
+    mc.on_raw = raw
+    try:
+        name = mc.open(port, model)
+    except Exception as e:
+        rep["error"] = f"open {port!r}: {type(e).__name__}: {e}"
+        rep["hints"].append("The port exists but would not open: close any other app using the controller and try again.")
+        rep["status"] = "no-device"
+        return rep
+    m = mc.mapping
+    rep.update({"port": port, "output": mc.out_name, "mapping": name, "model": m.get("model", name)})
+    if name == "apc40" and "mk" not in port.lower():
+        rep["hints"].append("This looks like an original APC40; the mapping targets the APC40 mkII. Pads may not line up.")
+    if name == "generic":
+        rep["hints"].append("No APC mapping matched this port name; pass --model apc-mini|apc-mini-mk2|apc-key25|apc-key25-mk2|apc40.")
+    say(f"Port: {port}  ->  mapping {name} ({m.get('model', name)});  LED output: {mc.out_name or 'NOT FOUND'}")
+    if mc.out is None:
+        rep["hints"].append("No matching MIDI output port, so pad LEDs cannot light. LED steps will still check input.")
+    # LED sweep: every pad lights in turn so you can spot dead LEDs
+    g = m.get("grid") or {}
+    if g and mc.out is not None:
+        say("LED sweep: every pad should light up once, row by row, in each colour...")
+        for state in ("on", "accent", "playhead"):
+            for r in range(g["rows"]):
+                for c in range(g["cols"]):
+                    mc.set_led(r, c, state)
+                if led_delay:
+                    time.sleep(led_delay * g["cols"])
+            mc.clear_leds()
+        rep["led_messages"] = len(dev.sent) if dev else None
+    while not events.empty():
+        events.get_nowait()
+    for step in _apc_steps(m):
+        mc.clear_leds()
+        while not events.empty():          # drop leftovers (a fader sends a burst of messages)
+            events.get_nowait()
+        if "light" in step:
+            mc.set_led(*step["light"], "accent")
+        say(f"[{step['id']}] {step['prompt']}  (waiting {timeout:g}s)")
+        if dev:
+            _virtual_actor(dev, step)
+        res = {"id": step["id"], "expect": list(step["expect"]), "status": "timeout", "got": []}
+        t_end = time.monotonic() + timeout
+        while time.monotonic() < t_end:
+            try:
+                ev = events.get(timeout=min(0.1, max(0.0, t_end - time.monotonic())))
+            except queue.Empty:
+                if dev:
+                    break
+                continue
+            res["got"].append([round(x, 3) if isinstance(x, float) else x for x in ev])
+            if tuple(ev[:len(step["expect"])]) == tuple(step["expect"]):
+                res["status"] = "pass"
+                break
+        if res["status"] != "pass" and res["got"]:
+            res["status"] = "wrong"
+        if dev and "light" in step:
+            res["led_ok"] = dev.led_state(*step["light"]) == "accent" and len(dev.lit()) == 1
+        say(f"   -> {res['status'].upper()}" + (f"  (got {res['got'][:3]})" if res["status"] == "wrong" else ""))
+        rep["steps"].append(res)
+    mc.clear_leds()
+    if seconds > 0:
+        say(f"Free play: press anything for {seconds:g}s; every message is logged...")
+        time.sleep(seconds)
+    mc.close()
+    st = [s["status"] for s in rep["steps"]]
+    rep["summary"] = {k: st.count(k) for k in ("pass", "wrong", "timeout")}
+    rep["status"] = "pass" if st and all(s == "pass" for s in st) else ("partial" if "pass" in st else "fail")
+    if any(s["status"] == "wrong" for s in rep["steps"]):
+        rep["hints"].append("Some controls sent a different message than the mapping expects; the report lists what arrived. "
+                            "Please attach it to a 'Hardware report' issue so the mapping can be fixed.")
+    return rep
+
+
+def apc_report_md(rep: dict) -> str:
+    """Markdown report to paste into the 'APC hardware report' issue."""
+    L = [f"## 8bms APC test: **{rep.get('status', '?').upper()}**", ""]
+    L += [f"- {k}: `{v}`" for k, v in rep.get("env", {}).items()]
+    for k in ("port", "output", "mapping", "model", "virtual"):
+        if k in rep:
+            L.append(f"- {k}: `{rep[k]}`")
+    if rep.get("inputs") is not None:
+        L.append(f"- inputs: `{rep.get('inputs')}`  outputs: `{rep.get('outputs')}`")
+    if rep.get("error"):
+        L.append(f"- error: `{rep['error']}`")
+    if rep.get("steps"):
+        L += ["", "| step | result | expected | received |", "|---|---|---|---|"]
+        for s in rep["steps"]:
+            L.append(f"| {s['id']} | {s['status']}{' (LED ok)' if s.get('led_ok') else ''} | `{s['expect']}` | `{s['got'][:3]}` |")
+    if rep.get("unmapped"):
+        L += ["", "Unmapped messages (first 20):", "```"] + [json.dumps(u) for u in rep["unmapped"][:20]] + ["```"]
+    if rep.get("hints"):
+        L += ["", "Hints:"] + [f"- {h}" for h in rep["hints"]]
+    if rep.get("steps"):
+        L += ["", "Please also say: did every pad light in the LED sweep, once per colour (3 colours)? Any dead or wrong-colour pads?"]
+    return "\n".join(L) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -8574,6 +9208,23 @@ def launch_gui(path: Optional[str] = None, screenshot: Optional[str] = None, sel
             app.push_undo()
             assert app.drums.toggle("clap", 3) is True
             assert app.drums.toggle("clap", 3) is False
+            # Akai APC end to end without hardware: a VirtualApc drives the real MIDI handlers + LED feedback
+            dev = VirtualApc("apc-mini")
+            app.midi = MidiController(lambda kind, *a: app.on_midi(kind, *a), backend=dev)
+            app.midi.open(dev.port_name)
+            app.sync_leds()
+            ci = DRUM_ROWS.index("clap")
+            assert dev.led_state(ci, 3) == "off"
+            dev.press(ci, 3)
+            assert any(n.inst == "clap" and n.start == 3 * (PPQ // 4) for n in app.pattern.notes), "APC pad -> drum step"
+            assert dev.led_state(ci, 3) == "on", "APC LED feedback"
+            dev.press(ci, 3)
+            assert dev.led_state(ci, 3) == "off"
+            dev.fader(0, 0.5)
+            assert abs(app.song.tracks[0].volume - 64 / 127) < 1e-3, "APC fader -> track volume"
+            app.undo(); app.undo()
+            app.midi.close()
+            app.midi = None
             # arrangement: drop pattern A of the drum track at bar 30
             before = len(app.song.arrangement)
             assert app.arr.drop_pattern(di, app.cur_pattern, app.arr.HW + 30 * app.arr.BW + 2, app.arr.RUL + di * app.arr.RH + 3)
@@ -8620,7 +9271,14 @@ def launch_gui(path: Optional[str] = None, screenshot: Optional[str] = None, sel
             root.update()
             if screenshot:
                 try:
-                    y0 = max(0, root.winfo_y())          # include the menu bar
+                    y0 = root.winfo_rooty()               # include the menu bar (Tk maps a clone menu above the client area)
+                    for wc in root.tk.eval("winfo children .").split():
+                        try:
+                            if root.tk.eval(f"winfo class {wc}") == "Menu" and root.tk.eval(f"winfo ismapped {wc}") == "1":
+                                y0 = min(y0, int(root.tk.eval(f"winfo rooty {wc}")))
+                        except tk.TclError:
+                            pass
+                    y0 = max(0, y0)
                     x, y = root.winfo_rootx(), y0
                     w, h = root.winfo_width(), root.winfo_rooty() - y0 + root.winfo_height()
                     if shutil.which("import"):
@@ -8777,6 +9435,17 @@ def build_parser() -> argparse.ArgumentParser:
     md = sub.add_parser("midi", help="list MIDI inputs / monitor a controller (Akai APC etc.)")
     md.add_argument("--port")
     md.add_argument("--seconds", type=float, default=0)
+    apc = sub.add_parser("apc", help="Akai APC tools: `8bms apc test` checks a controller and prints a report")
+    apcs = apc.add_subparsers(dest="acmd")
+    at = apcs.add_parser("test", help="guided hardware check: LED sweep, pads, faders, transport -> report")
+    at.add_argument("--port", help="MIDI input name (default: first port that looks like an APC)")
+    at.add_argument("--model", choices=APC_MODELS, help="force a mapping instead of detecting it from the port name")
+    at.add_argument("--virtual", nargs="?", const="apc-mini", choices=APC_MODELS, metavar="MODEL",
+                    help="no hardware: run against a simulated APC (default apc-mini)")
+    at.add_argument("--timeout", type=float, default=15.0, help="seconds to wait at each prompt (default 15)")
+    at.add_argument("--seconds", type=float, default=0.0, help="extra free-play logging time after the guided steps")
+    at.add_argument("--report", help="write a Markdown report here (paste it into a GitHub hardware-report issue)")
+    apcs.add_parser("models", help="list the built-in APC mappings")
     o = sub.add_parser("op", help="run any registered op: 8bms op <name> k=v ...")
     o.add_argument("name", nargs="?")
     o.add_argument("kv", nargs="*")
@@ -9022,6 +9691,21 @@ def _dispatch(a, out: _Out) -> Optional[int]:
         except KeyboardInterrupt:
             pass
         mc.close()
+    elif c == "apc":
+        if a.acmd == "models":
+            out({k: {"model": MIDI_MAPPINGS[k].get("model"), "match": MIDI_MAPPINGS[k].get("match")} for k in APC_MODELS},
+                "\n".join(f"{k:14} {MIDI_MAPPINGS[k].get('model')}  (port names containing {MIDI_MAPPINGS[k]['match'][0]!r})" for k in APC_MODELS))
+            return 0
+        if a.acmd != "test":
+            build_parser().parse_args(["apc", "--help"])
+        talk = not (out.json or out.quiet)
+        rep = apc_test(port=a.port, model=a.model, virtual=a.virtual, timeout=a.timeout, seconds=a.seconds,
+                       led_delay=0.0 if a.virtual else 0.02, say=(lambda t: print(t, flush=True)) if talk else (lambda t: None))
+        md = apc_report_md(rep)
+        if a.report:
+            Path(a.report).write_text(md, encoding="utf-8")
+        out(rep, md + (f"\nreport saved: {a.report}" if a.report else "\n(add --report apc-report.md to save this)"))
+        return {"pass": 0, "partial": 1, "fail": 1}.get(rep["status"], 2)
     elif c == "op":
         if not a.name:
             out({n: o.help for n, o in OPS.items()}, "\n".join(f"{n:12} {o.help}" for n, o in OPS.items()))

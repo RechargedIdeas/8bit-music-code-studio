@@ -31,7 +31,7 @@ The host API follows semver. Additive changes bump the minor version; breaking c
 
 ## Permissions
 These declare what a plugin needs; they appear in `plugin list/info` and in the install output.
-- `network`: without it, `8bms plugin test` runs the plugin's tests with sockets blocked (enforced in the sandbox).
+- `network`: without it, `8bms plugin test` runs the plugin's tests with outgoing Python socket connections blocked (`socket.connect`, `connect_ex`, `create_connection`, so `urllib`, `requests` and `http.client` fail). This is a guard against accidental network use in tests, not a security boundary: subprocesses, native code, or a test that undoes the patch are not stopped.
 - `filesystem`, `midi`, `audio`, `subprocess`: currently advisory. They document intent, and reviewers and users see them.
 
-Plugins run in-process with normal Python rights, so install only plugins you trust.
+There is **no sandbox at run time**: installed plugins run in-process with your normal Python rights, so install only plugins you trust.

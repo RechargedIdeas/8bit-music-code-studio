@@ -39,6 +39,7 @@ Errors print one line, `error: …`; score errors include `line N`.
 | `8bms serve [--host 127.0.0.1] [--port 8765]` | [HTTP API](http-api.md) |
 | `8bms mcp` · `8bms acp` | [MCP](mcp.md) / [ACP](acp.md) servers on stdio |
 | `8bms midi [--port P] [--seconds N]` | list MIDI ports / monitor a controller ([midi-apc](midi-apc.md)) |
+| `8bms apc test [--port P] [--model M] [--virtual [M]] [--report FILE]` | guided Akai APC check with a Markdown report ([apc-hardware-testing](apc-hardware-testing.md)); `8bms apc models` lists mappings |
 | `8bms plugin list\|info\|enable\|disable\|install\|uninstall\|new\|validate\|test\|build\|package` | [plugins](plugins/README.md) |
 
 ## Batch example
