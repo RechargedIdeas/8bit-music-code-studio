@@ -36,13 +36,13 @@
       "pattern": "^inst\\s+[\\w-]+(\\s+\\w+)?(\\s+\\w+=\\S+)*$"
     },
     "track": {
-      "pattern": "^track\\s+[\\w-]+(\\s+(drum|mute|solo|[\\w-]+=\\S+))*$"
+      "pattern": "^track\\s+(\\\"[^\\\"]+\\\"|[^\\s\\\"]+)(\\s+(drum|mute|solo|[\\w-]+=\\S+))*$"
     },
     "pat": {
-      "pattern": "^(pat|pattern)\\s+[^\\s:=]+(\\s+[^\\s:=]+)?(\\s+[\\w-]+=\\S+)*\\s*:.*$"
+      "pattern": "^(pat|pattern)\\s+(\\\"[^\\\"]+\\\"|[^\\s:=\\\"]+)(\\s*[^\\s:=]+)?(\\s+[\\w-]+=\\S+)*\\s*:.*$"
     },
     "arr": {
-      "pattern": "^arr\\s+[\\w-]+\\s*:.*$"
+      "pattern": "^arr\\s+(\\\"[^\\\"]+\\\"|[^\\s:\\\"]+)\\s*:.*$"
     }
   },
   "x-note-language": "pattern bodies use the note language - see docs/note-language.md",

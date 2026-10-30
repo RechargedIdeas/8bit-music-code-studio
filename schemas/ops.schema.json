@@ -473,7 +473,7 @@
     "properties": {
       "src": {
         "type": "string",
-        "description": "song: file .8bt/.8bms, @handle, @last, demo or gen:style:bars:seed"
+        "description": "song (file/@handle/demo) or an existing .wav"
       },
       "out": {
         "type": "string",

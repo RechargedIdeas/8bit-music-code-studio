@@ -99,3 +99,26 @@ def test_interpreter_language():
     assert it.song.length_bars() == 4 and it.song.note_count() > 10, out
     assert "/export" in it.execute("/help")
     assert "?" in it.execute("florbnicate the zorp") or "understand" in it.execute("florbnicate the zorp")
+
+
+def test_track_names_with_spaces_round_trip_and_match_schema():
+    import json
+    import re
+    from pathlib import Path
+    song = bms.new_song()                        # default tracks are "Pulse 1", "Pulse 2", ...
+    bms.apply_score(song, "track x mute\npat x A: o5 l8 c e g")
+    assert song.tracks[song.track_index("x")].mute
+    text = bms.song_to_score(song)
+    assert 'track "Pulse 1"' in text
+    back = bms.parse_score(text)
+    assert [t.name for t in back.tracks] == [t.name for t in song.tracks]
+    assert bms.song_to_score(back) == text
+    schema = json.loads((Path(__file__).resolve().parent.parent / "schemas" / "8bt.schema.json").read_text(encoding="utf-8"))
+    pats = {k: re.compile(v["pattern"]) for k, v in schema["x-statements"].items()}
+    for src in (song, bms.demo_song(), bms.generate_song("boss", 4, seed=1)):
+        for line in bms.song_to_score(src).splitlines():
+            for st in line.split("; "):
+                if not st or st.startswith("#"):
+                    continue
+                kw = st.split()[0]
+                assert kw in pats and pats[kw].match(st), st

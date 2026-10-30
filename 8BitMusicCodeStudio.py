@@ -1150,6 +1150,23 @@ def _expand_arr(items: List[str]) -> List[str]:
     return out
 
 
+def _qn(name: str) -> str:
+    """Track name for .8bt: bare if simple, else "quoted" (names like 'Pulse 1' round-trip)."""
+    return name if re.fullmatch(r'[^\s":.=]+', name) else '"' + name.replace('"', "'") + '"'
+
+
+def _take_name(text: str) -> Tuple[str, str]:
+    """Split a leading (optionally "quoted") name off a statement: ('Pulse 1', 'inst=lead')."""
+    text = text.strip()
+    if text.startswith('"'):
+        end = text.find('"', 1)
+        if end < 0:
+            raise ValueError("unclosed '\"' in name")
+        return text[1:end], text[end + 1:]
+    name, _, rem = text.partition(" ")
+    return name, rem
+
+
 def _apply_statement(song: Song, st: str, arranged: Dict[str, List[str]]):
     head, _, rest = st.partition(" ")
     kw = head.rstrip(":").lower()
@@ -1220,9 +1237,8 @@ def _apply_statement(song: Song, st: str, arranged: Dict[str, List[str]]):
         inst.name = name
         song.instruments[name] = apply_inst_kv(inst, kv)
     elif kw == "track":
-        parts = rest.split()
-        name = parts[0]
-        kv, pos = _kv(parts[1:])
+        name, remainder = _take_name(rest)
+        kv, pos = _kv(remainder.split())
         try:
             t = song.tracks[song.track_index(name)]
         except KeyError:
@@ -1235,8 +1251,8 @@ def _apply_statement(song: Song, st: str, arranged: Dict[str, List[str]]):
         t.instrument = kv.get("inst", t.instrument)
         t.volume = float(kv.get("vol", t.volume))
         t.pan = float(kv.get("pan", t.pan))
-        t.mute = kv.get("mute", str(t.mute)).lower() in ("1", "true", "yes")
-        t.solo = kv.get("solo", str(t.solo)).lower() in ("1", "true", "yes")
+        t.mute = "mute" in pos or kv.get("mute", str(t.mute)).lower() in ("1", "true", "yes")
+        t.solo = "solo" in pos or kv.get("solo", str(t.solo)).lower() in ("1", "true", "yes")
         default_kind = "noise" if t.drum else {"triangle": "triangle", "noise": "noise"}.get(song.get_instrument(t.instrument).wave, "pulse1")
         if default_kind == "pulse1" and any(x.kind == "pulse1" for x in song.tracks if x is not t):
             default_kind = "pulse2" if not any(x.kind == "pulse2" for x in song.tracks if x is not t) else "extra"
@@ -1246,7 +1262,16 @@ def _apply_statement(song: Song, st: str, arranged: Dict[str, List[str]]):
         if not sep:
             raise ValueError("pattern needs ':' before the notes")
         hp = header.split()
-        if kw == "play":
+        if header.strip().startswith('"'):
+            tname, remainder = _take_name(header)
+            hp2 = remainder.split()
+            if kw == "play":
+                pname, kvp = "A", hp2
+            elif hp2 and hp2[0].startswith("."):
+                pname, kvp = hp2[0][1:], hp2[1:]
+            else:
+                pname, kvp = (hp2[0] if hp2 else "A"), hp2[1:]
+        elif kw == "play":
             tname, pname, kvp = hp[0], "A", hp[1:]
         elif "." in hp[0]:
             tname, pname = hp[0].split(".", 1)
@@ -1285,7 +1310,7 @@ def _apply_statement(song: Song, st: str, arranged: Dict[str, List[str]]):
         if not _:
             p = rest.split()
             tname, seq = p[0], " ".join(p[1:])
-        t = song.tracks[song.track_index(tname.strip())]
+        t = song.tracks[song.track_index(tname.strip().strip('"'))]
         arranged[t.name] = _expand_arr(seq.split())
     else:
         raise ValueError(f"unknown statement {kw!r}")
@@ -1334,7 +1359,7 @@ def song_to_score(song: Song) -> str:
     tpb = song.ticks_per_bar
     for ti, t in enumerate(song.tracks):
         extras = (" drum" if t.drum else "") + (" mute=1" if t.mute else "") + (" solo=1" if t.solo else "")
-        L.append(f"track {t.name} inst={t.instrument} vol={t.volume:g} pan={t.pan:g} kind={t.kind}{extras}")
+        L.append(f"track {_qn(t.name)} inst={t.instrument} vol={t.volume:g} pan={t.pan:g} kind={t.kind}{extras}")
         for p in t.patterns.values():
             drum_ok = t.drum and p.notes and all(n.inst and n.length == PPQ // 4 and n.start % (PPQ // 4) == 0 and n.velocity in (0.8, 1.0, 0.45) for n in p.notes)
             if drum_ok:
@@ -1347,7 +1372,8 @@ def song_to_score(song: Song) -> str:
                 body = " ".join(f"{k}={''.join(v)}" for k, v in rows.items())
             else:
                 body = notes_to_text(p.notes)
-            L.append(f"pat {t.name}.{p.name} bars={p.bars}: {body}")
+            tn = _qn(t.name)
+            L.append(f"pat {tn} {p.name} bars={p.bars}: {body}" if tn.startswith('"') else f"pat {tn}.{p.name} bars={p.bars}: {body}")
         clips = sorted((c for c in song.arrangement if c.track == ti), key=lambda c: c.bar)
         seq, bar = [], 0
         for c in clips:
@@ -1357,7 +1383,7 @@ def song_to_score(song: Song) -> str:
                 continue  # overlapping clips cannot be expressed; skipped
             seq.append(c.pattern)
             bar = c.bar + t.patterns[c.pattern].bars if c.pattern in t.patterns else c.bar + 1
-        L.append(f"arr {t.name}: " + (" ".join(seq) if seq else "-"))
+        L.append(f"arr {_qn(t.name)}: " + (" ".join(seq) if seq else "-"))
     return "\n".join(L) + "\n"
 
 
@@ -2096,8 +2122,8 @@ def score_json_schema() -> dict:
         "title": r"^title\s+.+$", "bpm": r"^bpm\s+\d+(\.\d+)?$", "time": r"^time\s+\d+/\d+$", "swing": r"^swing\s+[0-9.]+$",
         "key": r"^key\s+[A-Ga-g][#b]?\s*(" + "|".join(SCALES) + r")?$", "master": r"^master\s+[0-9.]+$", "loop": r"^loop\s+\d+-\d+$",
         "fx": r"^fx\s+\w+(\s+\w+=[-0-9.]+)*$", "inst": r"^inst\s+[\w-]+(\s+\w+)?(\s+\w+=\S+)*$",
-        "track": r"^track\s+[\w-]+(\s+(drum|mute|solo|[\w-]+=\S+))*$",
-        "pat": r"^(pat|pattern)\s+[^\s:=]+(\s+[^\s:=]+)?(\s+[\w-]+=\S+)*\s*:.*$", "arr": r"^arr\s+[\w-]+\s*:.*$"}
+        "track": r"^track\s+(\"[^\"]+\"|[^\s\"]+)(\s+(drum|mute|solo|[\w-]+=\S+))*$",
+        "pat": r"^(pat|pattern)\s+(\"[^\"]+\"|[^\s:=\"]+)(\s*[^\s:=]+)?(\s+[\w-]+=\S+)*\s*:.*$", "arr": r"^arr\s+(\"[^\"]+\"|[^\s:\"]+)\s*:.*$"}
     return {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "https://github.com/RechargedIdeas/8bit-music-code-studio/schemas/8bt.schema.json",
             "title": "8bms score (.8bt)", "description": SCORE_HELP + "\nValidate semantically with `8bms check file.8bt`.",
             "type": "string", "minLength": 1, "x-line-comment": "#", "x-statement-separator": ";",
