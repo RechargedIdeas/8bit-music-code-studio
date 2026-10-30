@@ -137,6 +137,152 @@ jobs:
           ./install.ps1 -Uninstall -Purge
           if (Test-Path "$HOME/.8bms") { throw "still there" }
 
+  install-ps1-robust:
+    name: install.ps1 robustness (${{ matrix.scenario }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [broken-pipx-shim, no-pipx, pipx-home-missing-drive, raw-url-irm-iex, stale-copy-handover, ps51-broken-shims, cmd-autorun-broken]
+    env:
+      EIGHTBMS_DEBUG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: set up the failure, then install the way users do (irm | iex)
+        if: matrix.scenario != 'ps51-broken-shims'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $here = (Get-Location).Path
+          $fake = Join-Path $env:RUNNER_TEMP "fakebin"; New-Item -ItemType Directory -Force $fake | Out-Null
+          # a pipx/uv shim like the one a removed Python leaves behind
+          $broken = "@echo off`r`necho The system cannot find the path specified.`r`nexit /b 1`r`n"
+          switch ("${{ matrix.scenario }}") {
+            "broken-pipx-shim" {
+              Set-Content -Encoding ASCII (Join-Path $fake "pipx.cmd") $broken
+              Set-Content -Encoding ASCII (Join-Path $fake "uv.cmd") $broken
+              $env:Path = "$fake;$env:Path"
+              $env:EIGHTBMS_SOURCE = $here
+            }
+            "no-pipx" {
+              # drop every pipx from PATH; `python -m pipx` must be bootstrapped by the installer
+              $env:Path = (($env:Path -split ";") | Where-Object { $_ -and -not (Test-Path (Join-Path $_ "pipx.exe")) -and -not (Test-Path (Join-Path $_ "pipx.cmd")) }) -join ";"
+              if (Get-Command pipx -ErrorAction SilentlyContinue) { throw "pipx still on PATH" }
+              python -m pip uninstall -y pipx 2>$null
+              $env:EIGHTBMS_SOURCE = $here
+            }
+            "pipx-home-missing-drive" {
+              $env:PIPX_HOME = "Q:\nope\pipx"; $env:PIPX_BIN_DIR = "Q:\nope\bin"; $env:PIPX_SHARED_LIBS = "Q:\nope\shared"; $env:UV_TOOL_DIR = "Q:\nope\uv"
+              $env:EIGHTBMS_SOURCE = $here
+            }
+            "cmd-autorun-broken" {
+              New-Item -Force "HKCU:\Software\Microsoft\Command Processor" | Out-Null
+              Set-ItemProperty "HKCU:\Software\Microsoft\Command Processor" -Name AutoRun -Value "Q:\missing\autorun.cmd"
+              Set-Content -Encoding ASCII (Join-Path $fake "pipx.cmd") $broken
+              $env:Path = "$fake;$env:Path"
+              $env:EIGHTBMS_SOURCE = $here
+            }
+            "raw-url-irm-iex" { $env:EIGHTBMS_COMMIT = "${{ github.sha }}" }
+            "stale-copy-handover" {
+              # an old cached copy must hand over to the current script (here: the checked-out one)
+              (Get-Content -Raw ./install.ps1) -replace '\$InstallerVersion = "[^"]+"', '$InstallerVersion = "0.0.1"' | Set-Content -Encoding UTF8 (Join-Path $env:RUNNER_TEMP "stale.ps1")
+              $env:EIGHTBMS_INSTALLER_URL = (Join-Path $here "install.ps1")
+              $env:EIGHTBMS_SOURCE = $here
+            }
+          }
+          if ("${{ matrix.scenario }}" -eq "raw-url-irm-iex") {
+            irm "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.ps1" | iex
+          } elseif ("${{ matrix.scenario }}" -eq "stale-copy-handover") {
+            $out = Get-Content -Raw (Join-Path $env:RUNNER_TEMP "stale.ps1") | iex 6>&1 | Out-String
+            Write-Host $out
+            if ($out -notmatch "is stale") { throw "stale copy did not hand over" }
+          } else {
+            Get-Content -Raw ./install.ps1 | iex
+          }
+          if (-not $global:EIGHTBMS_INSTALL_OK) { throw "installer reported failure" }
+          $v = (8bms --version | Out-String).Trim(); Write-Host $v
+          $want = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($v -notmatch [regex]::Escape($want)) { throw "expected $want, got $v" }
+          8bms gen --bars 2 --seed 1 -o s.8bt; 8bms render s.8bt -o s.wav
+          if (-not (Test-Path s.wav)) { throw "no wav" }
+      - name: Windows PowerShell 5.1, broken pipx and uv shims, forced venv
+        if: matrix.scenario == 'ps51-broken-shims'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $fake = Join-Path $env:RUNNER_TEMP "fakebin"; New-Item -ItemType Directory -Force $fake | Out-Null
+          $broken = "@echo off`r`necho The system cannot find the path specified.`r`nexit /b 1`r`n"
+          Set-Content -Encoding ASCII (Join-Path $fake "pipx.cmd") $broken
+          Set-Content -Encoding ASCII (Join-Path $fake "uv.cmd") $broken
+          $env:Path = "$fake;$env:Path"
+          $env:EIGHTBMS_SOURCE = (Get-Location).Path
+          Get-Content -Raw ./install.ps1 | iex
+          if (-not $global:EIGHTBMS_INSTALL_OK) { throw "auto install failed" }
+          8bms --version
+          if ($LASTEXITCODE) { throw "8bms does not run" }
+          $env:EIGHTBMS_METHOD = "venv"
+          Get-Content -Raw ./install.ps1 | iex
+          if (-not $global:EIGHTBMS_INSTALL_OK) { throw "venv install failed" }
+          & "$HOME\.8bms\bin\8bms.exe" --version
+          if ($LASTEXITCODE) { throw "venv 8bms does not run" }
+      - name: new cmd.exe sees 8bms
+        shell: cmd
+        run: |
+          set "PATH=%USERPROFILE%\.8bms\bin;%USERPROFILE%\.local\bin;%APPDATA%\Python\Python312\Scripts;%PATH%"
+          8bms --version
+
+  install-sh-robust:
+    name: install.sh robustness (${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [broken-pipx-shim, no-pipx, pipx-home-unusable, raw-url-curl-sh, stale-copy-handover, debian-no-venv-no-pip]
+    env:
+      EIGHTBMS_DEBUG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        if: matrix.scenario != 'debian-no-venv-no-pip'
+        with:
+          python-version: "3.12"
+      - name: set up the failure, then install
+        if: matrix.scenario != 'debian-no-venv-no-pip'
+        run: |
+          set -eu
+          fake="$RUNNER_TEMP/fakebin"; mkdir -p "$fake"
+          printf '#!/bin/sh\necho "The system cannot find the path specified."\nexit 1\n' > "$fake/pipx"; chmod +x "$fake/pipx"
+          export EIGHTBMS_SOURCE="$PWD"
+          case "${{ matrix.scenario }}" in
+            broken-pipx-shim) export PATH="$fake:$PATH" ;;
+            no-pipx) n=0; while command -v pipx >/dev/null && [ $n -lt 5 ]; do sudo rm -f "$(command -v pipx)"; n=$((n+1)); done; ! command -v pipx; ! python -m pipx --version ;;
+            pipx-home-unusable) export PIPX_HOME=/proc/nope/pipx PIPX_BIN_DIR=/proc/nope/bin UV_TOOL_DIR=/proc/nope/uv ;;
+            raw-url-curl-sh) unset EIGHTBMS_SOURCE; export EIGHTBMS_COMMIT="${{ github.sha }}" ;;
+            stale-copy-handover) sed 's/^INSTALLER_VERSION=.*/INSTALLER_VERSION="0.0.1"/' install.sh > "$RUNNER_TEMP/stale.sh"; export EIGHTBMS_INSTALLER_URL="$PWD/install.sh" ;;
+          esac
+          case "${{ matrix.scenario }}" in
+            raw-url-curl-sh) curl -fsSL "https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/install.sh" | sh -s -- --no-modify-path ;;
+            stale-copy-handover) sh < "$RUNNER_TEMP/stale.sh" 2>&1 | tee out.log; grep -q "is stale" out.log ;;
+            *) sh < install.sh ;;
+          esac
+          export PATH="$HOME/.local/bin:$HOME/.8bms/bin:$PATH"
+          v="$(8bms --version)"; echo "$v"
+          want="$(sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)"
+          case "$v" in *"$want"*) ;; *) echo "expected $want"; exit 1 ;; esac
+          8bms gen --bars 2 --seed 1 -o s.8bt && 8bms render s.8bt -o s.wav && test -s s.wav
+      - name: Debian with python3 only (no pip, no venv module) -> installer must fetch uv itself
+        if: matrix.scenario == 'debian-no-venv-no-pip'
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -e EIGHTBMS_DEBUG=1 debian:bookworm-slim sh -c '
+            set -e
+            apt-get update -qq && apt-get install -y -qq python3 curl ca-certificates >/dev/null
+            ! python3 -m pip --version && ! python3 -c "import ensurepip"
+            cp -r /src /tmp/src && sh /tmp/src/install.sh --source /tmp/src --no-modify-path
+            ~/.local/bin/8bms --version && ~/.local/bin/8bms gen --bars 2 --seed 1 -o /tmp/s.8bt'
+
   package:
     runs-on: ubuntu-latest
     steps:

@@ -32,6 +32,9 @@ Use Windows Terminal or PowerShell 7. The studio enables ANSI (VT) mode itself, 
 **`irm … | iex` with options?**
 `$env:EIGHTBMS_EXTRAS="all"; irm …/install.ps1 | iex`, or download the script and run `.\install.ps1 -All`. Scripts blocked? Run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
+**The Windows installer says "The system cannot find the path specified."**
+That message comes from `cmd.exe`, for example from a leftover `pipx`/`uv` launcher of a Python that was removed, or from a cmd.exe *AutoRun* entry pointing at a missing file. Installer 1.1.1 and later never use those launchers: they run `python -m pipx`, reinstall pipx if it is broken, and fall back to uv and then a plain venv. If you still see the old behaviour, you got a cached copy of the old script (see the first output line, `installer <version>`); run `irm https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.ps1 -Headers @{Accept='application/vnd.github.raw'} | iex`. If it still fails, set `$env:EIGHTBMS_DEBUG = "1"` and paste the output into an issue.
+
 **How do I uninstall?**
 `sh install.sh --uninstall` or `.\install.ps1 -Uninstall`. Add `--purge` / `-Purge` to delete `~/.8bms`, which holds handles, sessions, plugins and instruments.
 

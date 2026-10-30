@@ -21,11 +21,21 @@ A chiptune studio in **one Python file**, `8BitMusicCodeStudio.py`. It has a Tki
 | Linux / macOS | `curl -fsSL https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.sh \| sh` |
 | Windows (PowerShell) | `irm https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.ps1 \| iex` |
 
-The one-liners fetch from `raw.githubusercontent.com`, so they work only while the repository is public. For a private checkout, run the script from your clone instead: `sh install.sh --source .` or `.\install.ps1 -Source .`.
+Just updated? `raw.githubusercontent.com` caches files for up to 5 minutes and ignores `?query` strings, so right after a release you may get the previous script. It notices that and switches to the current one itself, and every run prints `installer <version> (app commit <sha>)`. To skip the cache entirely, fetch through the GitHub API:
+```powershell
+irm https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.ps1 -Headers @{Accept='application/vnd.github.raw'} | iex
+```
+```sh
+curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.sh | sh
+```
+
+The one-liners fetch from GitHub, so they work only while the repository is public. For a private checkout, run the script from your clone instead: `sh install.sh --source .` or `.\install.ps1 -Source .`.
 
 The installer:
 - checks for Python 3.10+ (and prints the winget/brew/apt/dnf/pacman command if it's missing);
-- installs with **pipx**, else **uv tool**, else a private venv in `~/.8bms/venv`;
+- installs with **pipx**, else **uv tool**, else a private venv in `~/.8bms/venv`. A missing or broken pipx or uv is installed or repaired for you (user-level, via `python -m pip install --user`, or uv's official installer), and if one method fails the next is tried;
+- ignores environment settings that would break it (for example `PIPX_HOME` on a drive that no longer exists) and says so;
+- prints every failing command with its exit code, and a diagnostics block when nothing works (`$env:EIGHTBMS_DEBUG="1"` / `--verbose` prints it always);
 - puts `8bms` on your PATH with no sudo needed;
 - tells you if Tk (GUI) or ffmpeg (OGG/MP3) is missing.
 
@@ -39,6 +49,7 @@ sh install.sh --uninstall [--purge] # --purge also deletes ~/.8bms (handles, plu
 ```powershell
 .\install.ps1 -All ; .\install.ps1 -Uninstall -Purge
 $env:EIGHTBMS_EXTRAS="all"; irm https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.ps1 | iex
+$env:EIGHTBMS_METHOD="venv"; $env:EIGHTBMS_DEBUG="1"; irm https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.ps1 | iex
 ```
 
 **Without the script**, any of these work (add `[all]` for playback and MIDI):

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "8Bit Music Code Studio HTTP API",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Start with `8bms serve` (default http://127.0.0.1:8765). One registry powers CLI, HTTP, MCP and ACP."
   },
   "servers": [

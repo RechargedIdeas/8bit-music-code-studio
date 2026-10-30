@@ -29,11 +29,21 @@ A chiptune studio in **one Python file**, `8BitMusicCodeStudio.py`. It has a Tki
 | Linux / macOS | `curl -fsSL https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.sh \| sh` |
 | Windows (PowerShell) | `irm https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.ps1 \| iex` |
 
-The one-liners fetch from `raw.githubusercontent.com`, so they work only while the repository is public. For a private checkout, run the script from your clone instead: `sh install.sh --source .` or `.\install.ps1 -Source .`.
+Just updated? `raw.githubusercontent.com` caches files for up to 5 minutes and ignores `?query` strings, so right after a release you may get the previous script. It notices that and switches to the current one itself, and every run prints `installer <version> (app commit <sha>)`. To skip the cache entirely, fetch through the GitHub API:
+```powershell
+irm https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.ps1 -Headers @{Accept='application/vnd.github.raw'} | iex
+```
+```sh
+curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.sh | sh
+```
+
+The one-liners fetch from GitHub, so they work only while the repository is public. For a private checkout, run the script from your clone instead: `sh install.sh --source .` or `.\install.ps1 -Source .`.
 
 The installer:
 - checks for Python 3.10+ (and prints the winget/brew/apt/dnf/pacman command if it's missing);
-- installs with **pipx**, else **uv tool**, else a private venv in `~/.8bms/venv`;
+- installs with **pipx**, else **uv tool**, else a private venv in `~/.8bms/venv`. A missing or broken pipx or uv is installed or repaired for you (user-level, via `python -m pip install --user`, or uv's official installer), and if one method fails the next is tried;
+- ignores environment settings that would break it (for example `PIPX_HOME` on a drive that no longer exists) and says so;
+- prints every failing command with its exit code, and a diagnostics block when nothing works (`$env:EIGHTBMS_DEBUG="1"` / `--verbose` prints it always);
 - puts `8bms` on your PATH with no sudo needed;
 - tells you if Tk (GUI) or ffmpeg (OGG/MP3) is missing.
 
@@ -47,6 +57,7 @@ sh install.sh --uninstall [--purge] # --purge also deletes ~/.8bms (handles, plu
 ```powershell
 .\install.ps1 -All ; .\install.ps1 -Uninstall -Purge
 $env:EIGHTBMS_EXTRAS="all"; irm https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.ps1 | iex
+$env:EIGHTBMS_METHOD="venv"; $env:EIGHTBMS_DEBUG="1"; irm https://raw.githubusercontent.com/RechargedIdeas/8bit-music-code-studio/main/install.ps1 | iex
 ```
 
 **Without the script**, any of these work (add `[all]` for playback and MIDI):
@@ -391,7 +402,7 @@ Instruments: `8bms presets`. Waves: pulse (duty .125/.25/.5/.75), triangle, nois
 
 What the installer does:
 1. Finds Python 3.10+ (preferring one with Tk for the GUI). If none is found, it prints the exact `winget` / `brew` / `apt` / `dnf` / `pacman` command to run.
-2. Installs with **pipx** if you have it, else **uv tool**, else a private venv at `~/.8bms/venv`.
+2. Installs with **pipx**, else **uv tool**, else a private venv at `~/.8bms/venv`. It runs pipx and uv through your Python (`python -m pipx`), installs them for your user if they are missing or broken, and moves on to the next method if one fails.
 3. Puts `8bms` on your PATH (`~/.local/bin` or `~/.8bms/bin`; on Windows, your *user* PATH). It never uses sudo or admin rights.
 4. Warns if `tkinter` is missing (Linux: `sudo apt-get install python3-tk`); everything except the GUI still works.
 
@@ -404,7 +415,16 @@ sh install.sh --uninstall                             # add --purge to also dele
 $env:EIGHTBMS_EXTRAS = "all"; irm .../install.ps1 | iex
 irm .../install.ps1 -OutFile install.ps1; .\install.ps1 -All      # or -Uninstall [-Purge]
 ```
-Re-running the installer upgrades in place.
+Re-running the installer upgrades in place. Each run starts with `installer <version> (app commit <sha>)`.
+
+Right after an update, `raw.githubusercontent.com` may serve the previous script for up to 5 minutes (a `?query` string does not help). The script detects that and switches to the current version. To bypass the cache anyway:
+```powershell
+irm https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.ps1 -Headers @{Accept='application/vnd.github.raw'} | iex
+```
+```sh
+curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.sh | sh
+```
+Something failing? Run with `$env:EIGHTBMS_DEBUG = "1"` (Windows) or `sh -s -- --verbose` and paste the output into an issue.
 
 > The raw.githubusercontent.com one-liners work once the repository is public. Until then, clone the repo and run `sh install.sh --source .` (or `.\install.ps1 -Source .`).
 
@@ -1612,6 +1632,9 @@ Use Windows Terminal or PowerShell 7. The studio enables ANSI (VT) mode itself, 
 
 **`irm … | iex` with options?**
 `$env:EIGHTBMS_EXTRAS="all"; irm …/install.ps1 | iex`, or download the script and run `.\install.ps1 -All`. Scripts blocked? Run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+**The Windows installer says "The system cannot find the path specified."**
+That message comes from `cmd.exe`, for example from a leftover `pipx`/`uv` launcher of a Python that was removed, or from a cmd.exe *AutoRun* entry pointing at a missing file. Installer 1.1.1 and later never use those launchers: they run `python -m pipx`, reinstall pipx if it is broken, and fall back to uv and then a plain venv. If you still see the old behaviour, you got a cached copy of the old script (see the first output line, `installer <version>`); run `irm https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.ps1 -Headers @{Accept='application/vnd.github.raw'} | iex`. If it still fails, set `$env:EIGHTBMS_DEBUG = "1"` and paste the output into an issue.
 
 **How do I uninstall?**
 `sh install.sh --uninstall` or `.\install.ps1 -Uninstall`. Add `--purge` / `-Purge` to delete `~/.8bms`, which holds handles, sessions, plugins and instruments.

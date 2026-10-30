@@ -62,7 +62,7 @@ if __name__ == "__main__":  # run as a plain script: let plugins `import eightbi
     sys.modules.setdefault("eightbit_studio", sys.modules[__name__])
 
 APP_NAME = "8Bit Music Code Studio"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 API_VERSION = "1.0.0"          # plugin API (semver)
 SR = 44100                      # sample rate
 PPQ = 96                        # ticks per quarter note (divisible by 3 for triplets)

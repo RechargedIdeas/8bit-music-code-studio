@@ -11,7 +11,7 @@
 
 What the installer does:
 1. Finds Python 3.10+ (preferring one with Tk for the GUI). If none is found, it prints the exact `winget` / `brew` / `apt` / `dnf` / `pacman` command to run.
-2. Installs with **pipx** if you have it, else **uv tool**, else a private venv at `~/.8bms/venv`.
+2. Installs with **pipx**, else **uv tool**, else a private venv at `~/.8bms/venv`. It runs pipx and uv through your Python (`python -m pipx`), installs them for your user if they are missing or broken, and moves on to the next method if one fails.
 3. Puts `8bms` on your PATH (`~/.local/bin` or `~/.8bms/bin`; on Windows, your *user* PATH). It never uses sudo or admin rights.
 4. Warns if `tkinter` is missing (Linux: `sudo apt-get install python3-tk`); everything except the GUI still works.
 
@@ -24,7 +24,16 @@ sh install.sh --uninstall                             # add --purge to also dele
 $env:EIGHTBMS_EXTRAS = "all"; irm .../install.ps1 | iex
 irm .../install.ps1 -OutFile install.ps1; .\install.ps1 -All      # or -Uninstall [-Purge]
 ```
-Re-running the installer upgrades in place.
+Re-running the installer upgrades in place. Each run starts with `installer <version> (app commit <sha>)`.
+
+Right after an update, `raw.githubusercontent.com` may serve the previous script for up to 5 minutes (a `?query` string does not help). The script detects that and switches to the current version. To bypass the cache anyway:
+```powershell
+irm https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.ps1 -Headers @{Accept='application/vnd.github.raw'} | iex
+```
+```sh
+curl -fsSL -H "Accept: application/vnd.github.raw" https://api.github.com/repos/RechargedIdeas/8bit-music-code-studio/contents/install.sh | sh
+```
+Something failing? Run with `$env:EIGHTBMS_DEBUG = "1"` (Windows) or `sh -s -- --verbose` and paste the output into an issue.
 
 > The raw.githubusercontent.com one-liners work once the repository is public. Until then, clone the repo and run `sh install.sh --source .` (or `.\install.ps1 -Source .`).
 

@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-30
+### Fixed
+- **Windows installer failing with "The system cannot find the path specified."** when a broken `pipx` (or `uv`) launcher was on PATH. The installers now run pipx and uv through the Python they found (`python -m pipx`), never through a launcher on PATH.
+### Changed
+- Both installers install missing or broken dependencies themselves, user-level only:
+  - pipx via `python -m pip install --user pipx` (ensurepip first if pip is missing). If a pipx install fails, they upgrade pipx, reset its shared libraries and the old 8bms env, and retry once.
+  - uv via `pip --user`, or the official astral.sh installer.
+  - venv falls back to `--without-pip` plus ensurepip, then virtualenv, then `uv venv`. This also covers Debian/Ubuntu without `python3-venv`.
+  - Methods are tried in order: pipx, then uv, then venv.
+- Environment variables that would break an install are ignored for that run, with a warning: `PIPX_HOME`/`PIPX_BIN_DIR`/`UV_*` on a missing drive, a missing `PIPX_DEFAULT_PYTHON`, `PYTHONHOME`/`PYTHONPATH`/`PIP_TARGET`/`PIP_REQUIRE_VIRTUALENV`, and missing `TEMP`/`TMPDIR`. A Python found inside a venv is resolved to its base interpreter.
+- Every run prints `installer <version> (app commit <sha>)` and installs that exact commit (archive of the SHA, not `main.zip`).
+- A stale copy served by the raw.githubusercontent.com cache (up to 5 minutes, and `?query` strings are ignored) hands over to the current installer of that commit.
+- Every failing command is printed with its exit code. When nothing works, a diagnostics block is printed: Python, pipx/uv on PATH, `PIPX_*`/`UV_*` env, `%ComSpec%`, cmd.exe AutoRun, `TEMP`. Use `$env:EIGHTBMS_DEBUG="1"`, `-Verbose` or `--verbose` to always print it.
+- The Windows venv method puts a copy of `8bms.exe` on PATH instead of an `8bms.cmd` wrapper, so cmd.exe (and a broken AutoRun) is never involved.
+- Docs: cache-proof one-liners through the GitHub API, and a FAQ entry for this error.
+- CI: new Windows jobs for a broken pipx/uv shim, no pipx at all, `PIPX_HOME` on a missing drive, a broken cmd.exe AutoRun, `irm | iex` from the raw URL of the pushed commit, stale-copy handover, and Windows PowerShell 5.1. New Linux jobs cover the same cases plus Debian with python3 only (no pip, no venv).
+
 ## [1.1.0] - 2026-10-30
 ### Added
 - **JS export parity:** the exported ES module now carries an exact renderer (`renderSamples`, `toWav`, `renderVoice`), a line-for-line port of the Python synth. Its output matches the app's render sample for sample, including **duty sweep** and **bitcrush**, and runs in Node/Deno/Bun as well as browsers.
