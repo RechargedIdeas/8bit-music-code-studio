@@ -1,11 +1,27 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+  EIGHTBMS_BUDGET_SCALE: "4"     # latency budgets in tests/test_ml.py, relaxed for shared CI runners
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -14,14 +30,119 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb
-      - run: pip install numpy pytest pillow && pip install -e .
-      - run: pytest -q
-      - run: python scripts/build_all_plugins.py plugins --out dist/plugins
-      - run: xvfb-run -a -s "-screen 0 1440x960x24" python 8BitMusicCodeStudio.py gui --selftest --screenshot ci-shot.png
+      - name: Linux packages (Tk, xvfb, ffmpeg)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb ffmpeg
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - name: CLI smoke
+        run: |
+          8bms --version
+          8bms gen --style boss --bars 2 --seed 1 -o smoke.8bt
+          8bms render smoke.8bt -o smoke.wav
+          8bms compose "mellow space loop" --bars 4 --seed 1 --fields handle,score
+          8bms soundpack jump,coin -o smoke-sfx --fields count
+          8bms export smoke.8bt --js smoke.js --py smoke.py
+          python smoke.py -o smoke-py.wav
+      - name: Plugins + GUI screenshot
+        if: runner.os == 'Linux' && matrix.python-version == '3.12'
+        run: |
+          python scripts/build_all_plugins.py plugins --out dist/plugins
+          xvfb-run -a -s "-screen 0 1440x960x24" python 8BitMusicCodeStudio.py gui --selftest --screenshot ci-shot.png
       - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux' && matrix.python-version == '3.12'
         with:
           name: plugins-and-screenshot
           path: |
             dist/plugins/
             ci-shot.png
+
+  install-sh:
+    name: install.sh (${{ matrix.os }}, ${{ matrix.method }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        method: [venv, pipx, uv]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: matrix.method == 'uv'
+        uses: astral-sh/setup-uv@v6
+      - if: matrix.method == 'pipx'
+        run: python -m pip install pipx
+      - name: install
+        run: sh install.sh --source . --method ${{ matrix.method }} --mcp --no-modify-path
+      - name: smoke
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          8bms --version
+          8bms gen --bars 2 --seed 1 -o s.8bt && 8bms render s.8bt -o s.wav
+          8bms ml info
+      - name: re-run (idempotent upgrade)
+        run: sh install.sh --source . --method ${{ matrix.method }} --no-modify-path
+      - name: uninstall
+        run: |
+          sh install.sh --uninstall --purge
+          test ! -e "$HOME/.8bms"
+          test ! -e "$HOME/.local/bin/8bms"
+
+  install-ps1:
+    name: install.ps1 (windows, ${{ matrix.method }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        method: [venv, pipx, uv]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: matrix.method == 'uv'
+        uses: astral-sh/setup-uv@v6
+      - if: matrix.method == 'pipx'
+        run: python -m pip install pipx
+      - name: install + smoke (same session sees the PATH update)
+        shell: pwsh
+        run: |
+          ./install.ps1 -Source . -Method ${{ matrix.method }} -Mcp
+          if ($LASTEXITCODE) { exit 1 }
+          8bms --version
+          8bms gen --bars 2 --seed 1 -o s.8bt
+          8bms render s.8bt -o s.wav
+          if (-not (Test-Path s.wav)) { throw "no wav" }
+      - name: one-liner style (irm | iex equivalent)
+        shell: pwsh
+        run: |
+          $env:EIGHTBMS_SOURCE = (Get-Location).Path
+          Get-Content -Raw ./install.ps1 | Invoke-Expression
+          8bms --version
+      - name: cmd.exe entry point
+        shell: cmd
+        run: |
+          set "PATH=%USERPROFILE%\.8bms\bin;%USERPROFILE%\.local\bin;%PATH%"
+          8bms --version
+      - name: uninstall
+        shell: pwsh
+        run: |
+          ./install.ps1 -Uninstall -Purge
+          if (Test-Path "$HOME/.8bms") { throw "still there" }
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build twine
+      - run: python -m build
+      - run: python -m twine check --strict dist/*
+      - name: wheel works outside the repo
+        run: |
+          python -m venv /tmp/w && /tmp/w/bin/pip install dist/*.whl
+          cd /tmp && /tmp/w/bin/8bms --version && /tmp/w/bin/8bms ml info && /tmp/w/bin/8bms compose "town" --bars 2 --fields score
